@@ -22,7 +22,7 @@ def keep_alive():
     t.daemon = True
     t.start()
 
-# ==================== [ ID 설정 구간 ] ====================
+# ==================== [ ID 및 설정 구간 ] ====================
 ROLE_IDS = {
     "소뚜": 1543547595350220810,
     "3월": 1543547471756787722,
@@ -40,7 +40,13 @@ CATEGORY_IDS = {
     "유키": {"로벅스": 1373102489372590181}
 }
 
+# 문의 티켓 전용 카테고리 ID
+INQUIRY_CATEGORY_ID = 1463905394618536008
+
 CLOSED_CATEGORY_ID = 1516393469436887160
+
+# 푸터 아이콘 이미지 URL (첨부하신 인형 이미지의 웹 직링크 URL을 입력해주세요)
+LOGO_ICON_URL = "YOUR_IMAGE_URL_HERE" 
 # =========================================================
 
 intents = discord.Intents.default()
@@ -97,9 +103,12 @@ class TicketModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         guild = interaction.guild
         
-        # 문의 유형인 경우 카테고리가 상위 설정에 없으면 해당 채널의 카테고리 이용
-        cat_id = CATEGORY_IDS.get(self.seller, {}).get(self.category_type)
-        category = guild.get_channel(cat_id) if cat_id else interaction.channel.category
+        # 문의 유형인 경우 전용 문의 카테고리 ID 지정
+        if self.category_type == "문의":
+            category = guild.get_channel(INQUIRY_CATEGORY_ID)
+        else:
+            cat_id = CATEGORY_IDS.get(self.seller, {}).get(self.category_type)
+            category = guild.get_channel(cat_id) if cat_id else interaction.channel.category
 
         role_id = ROLE_IDS.get(self.seller)
         role = guild.get_role(role_id) if role_id else None
@@ -146,7 +155,6 @@ class TicketModal(discord.ui.Modal):
 
         admin_mention = admin_role.mention if admin_role else f"<@&{ADMIN_ROLE_ID}>"
 
-        # 문의 티켓 전용 안내 메시지 문구
         if self.category_type == "문의":
             content_text = f"{interaction.user.mention}님 안녕하세요.\n잠시 뒤 {admin_mention}가 올 예정이에요."
         else:
@@ -191,8 +199,6 @@ class CloseConfirmView(discord.ui.View):
         closed_category = interaction.guild.get_channel(CLOSED_CATEGORY_ID)
         
         await interaction.message.delete()
-
-        # 일반 유저의 채널 접근 권한 제거 (티켓 삭제 효과)
         await channel.set_permissions(interaction.user, read_messages=False, send_messages=False)
 
         if closed_category:
@@ -273,7 +279,6 @@ class TypeSelect(discord.ui.Select):
         elif seller == "유키":
             options = [discord.SelectOption(label="로벅스 구매하기", value="로벅스")]
 
-        # 구매 패널 메뉴에 공통 '문의하기' 추가
         options.append(discord.SelectOption(label="문의하기", value="문의"))
 
         super().__init__(placeholder="구매 또는 문의 유형을 선택해 주세요.", options=options, custom_id=f"select_type_{seller}")
@@ -315,7 +320,7 @@ class InquiryTicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📩 문의하기", style=discord.ButtonStyle.primary, custom_id="btn_general_inquiry")
+    @discord.ui.button(label="📩 선택하기", style=discord.ButtonStyle.primary, custom_id="btn_general_inquiry")
     async def open_inquiry(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = TicketModal(seller="일반문의", category_type="문의")
         await interaction.response.send_modal(modal)
@@ -369,7 +374,15 @@ async def create_inquiry(interaction: discord.Interaction):
         await interaction.response.send_message("❌ 이 명령어는 관리자만 사용할 수 있습니다.", ephemeral=True)
         return
 
-    embed = discord.Embed(title="📩 일반 문의하기", description="아래 버튼을 눌러 문의를 작성해 주세요.", color=0x2b2d31)
+    embed = discord.Embed(
+        title="📩 문의하기",
+        description="오류 & 문의를 원하시면,\n아래 **선택하기** 버튼을 눌러주세요.",
+        color=0x2b2d31
+    )
+    embed.set_footer(
+        text="𝐋𝐈𝐌𝐈𝐓𝐄𝐃 SHOP - Ticket tool",
+        icon_url=LOGO_ICON_URL
+    )
     
     await interaction.channel.send(embed=embed, view=InquiryTicketView())
     await interaction.response.send_message("문의 패널이 성공적으로 생성되었습니다.", ephemeral=True)
