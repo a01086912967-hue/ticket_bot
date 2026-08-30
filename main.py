@@ -51,7 +51,7 @@ class TicketBot(commands.Bot):
 
     async def setup_hook(self):
         self.add_view(MainTicketView())
-        self.add_view(TicketControlView())
+        self.add_view(TicketControlView(user_id=0, seller=""))
         self.add_view(ClosedTicketView())
 
 bot = TicketBot()
@@ -115,7 +115,6 @@ class TicketModal(discord.ui.Modal):
         role_mention = role.mention if role else f"@{self.seller}"
         admin_mention = admin_role.mention if admin_role else f"<@&{ADMIN_ROLE_ID}>"
 
-        # 멘션 문구 설정 (유저, 선택한 판매자 역할, 관리자 역할)
         content_text = f"{interaction.user.mention}님 안녕하세요\n{role_mention}님 이(가) 도착할 예정이에요.\n{admin_mention}"
 
         # 1) 안내 임베드 (초록색 테두리)
@@ -142,10 +141,10 @@ class TicketModal(discord.ui.Modal):
         await ticket_channel.send(
             content=content_text,
             embeds=[notice_embed, info_embed],
-            view=TicketControlView()
+            view=TicketControlView(user_id=interaction.user.id, seller=self.seller)
         )
 
-# --- 2. 닫기 관련 컨트롤 ---
+# --- 2. 컨트롤 버튼 (🔒 닫기 / 🎁 지급완료) ---
 class CloseConfirmView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -170,14 +169,39 @@ class CloseConfirmView(discord.ui.View):
         await interaction.response.send_message("티켓 닫기를 취소했습니다.")
 
 class TicketControlView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, user_id: int, seller: str):
         super().__init__(timeout=None)
+        self.user_id = user_id
+        self.seller = seller
 
     @discord.ui.button(label="🔒 닫기", style=discord.ButtonStyle.secondary, custom_id="btn_open_close_confirm")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
             "**티켓을 닫으시겠습니까?**",
             view=CloseConfirmView()
+        )
+
+    @discord.ui.button(label="🎁 지급완료", style=discord.ButtonStyle.success, custom_id="btn_complete_payout")
+    async def complete_payout(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 권한 확인: 관리자 역할이나 선택된 판매자 역할을 가졌는지 검사
+        seller_role_id = ROLE_IDS.get(self.seller)
+        user_role_ids = [r.id for r in interaction.user.roles]
+
+        if ADMIN_ROLE_ID not in user_role_ids and seller_role_id not in user_role_ids and not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("이 버튼을 사용할 수 있는 권한이 없습니다.", ephemeral=True)
+            return
+
+        # 티켓 생성 유저 멘션 대상 추출
+        target_user = f"<@{self.user_id}>" if self.user_id else interaction.channel.name.replace("ticket-", "")
+
+        complete_embed = discord.Embed(
+            description="**아이템이 정상적으로 지급되었어요. <a:Gzest001:1452891675625259122>\n<#1395743402456383631> 작성은 필수입니다.**",
+            color=0x2ecc71
+        )
+
+        await interaction.response.send_message(
+            content=f"{target_user}",
+            embed=complete_embed
         )
 
 class ClosedTicketView(discord.ui.View):
