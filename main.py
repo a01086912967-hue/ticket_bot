@@ -111,7 +111,6 @@ class TicketModal(discord.ui.Modal):
             f"{interaction.user.mention}님 안녕하세요. 진행자가 곧 도착할 예정이에요.\n{role_mention}"
         )
 
-        # 질문 제목 유지 + 백틱(`) 적용
         embed = discord.Embed(color=0x2b2d31)
         if self.category_type == "로벅스":
             embed.add_field(name="구매할 로벅스 수량을 입력해 주세요.", value=f"`{self.q1.value}`", inline=False)
@@ -239,7 +238,12 @@ async def on_ready():
 @bot.tree.command(name="티켓생성", description="티켓 구매 패널을 생성합니다.")
 async def create_ticket(interaction: discord.Interaction):
     embed = discord.Embed(title="🛒 구매 티켓 문의", description="아래 메뉴에서 원하는 판매자를 선택해 주세요.", color=0x2b2d31)
-    await interaction.response.send_message(embed=embed, view=MainTicketView())
+    
+    # 1. 해당 채널에 누구나 보는 공개 패널 메시지 전송
+    await interaction.channel.send(embed=embed, view=MainTicketView())
+    
+    # 2. 명령어를 실행한 사용자에게만 보이는 비밀 확인 메시지 전송
+    await interaction.response.send_message("패널이 생성되었어요.", ephemeral=True)
 
 if __name__ == "__main__":
     keep_alive()
