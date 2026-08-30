@@ -29,6 +29,9 @@ ROLE_IDS = {
     "유키": 1543547960422572053
 }
 
+# 관리자 역할 ID
+ADMIN_ROLE_ID = 1396885435850162317
+
 CATEGORY_IDS = {
     "소뚜": {"로벅스": 1543555550485282877, "인게임": 1543555594420494428},
     "3월": {"로벅스": 1543574405836316742, "기타": 1543575899516047480},
@@ -88,6 +91,7 @@ class TicketModal(discord.ui.Modal):
 
         role_id = ROLE_IDS.get(self.seller)
         role = guild.get_role(role_id) if role_id else None
+        admin_role = guild.get_role(ADMIN_ROLE_ID)
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
@@ -96,6 +100,8 @@ class TicketModal(discord.ui.Modal):
         }
         if role:
             overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        if admin_role:
+            overwrites[admin_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
         channel_name = f"ticket-{interaction.user.name}"
         ticket_channel = await guild.create_text_channel(
@@ -107,6 +113,10 @@ class TicketModal(discord.ui.Modal):
         await interaction.response.send_message(f"티켓이 생성되었습니다: {ticket_channel.mention}", ephemeral=True)
 
         role_mention = role.mention if role else f"@{self.seller}"
+        admin_mention = admin_role.mention if admin_role else f"<@&{ADMIN_ROLE_ID}>"
+
+        # 멘션 문구 설정 (유저, 선택한 판매자 역할, 관리자 역할)
+        content_text = f"{interaction.user.mention}님 안녕하세요\n{role_mention}님 이(가) 도착할 예정이에요.\n{admin_mention}"
 
         # 1) 안내 임베드 (초록색 테두리)
         notice_embed = discord.Embed(
@@ -130,7 +140,7 @@ class TicketModal(discord.ui.Modal):
             info_embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
 
         await ticket_channel.send(
-            content=f"{interaction.user.mention} {role_mention}",
+            content=content_text,
             embeds=[notice_embed, info_embed],
             view=TicketControlView()
         )
@@ -165,7 +175,6 @@ class TicketControlView(discord.ui.View):
 
     @discord.ui.button(label="🔒 닫기", style=discord.ButtonStyle.secondary, custom_id="btn_open_close_confirm")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 전체 공개 메시지로 전송 (ephemeral 제거)
         await interaction.response.send_message(
             "**티켓을 닫으시겠습니까?**",
             view=CloseConfirmView()
