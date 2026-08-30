@@ -94,7 +94,6 @@ class TicketModal(discord.ui.Modal):
         role = guild.get_role(role_id) if role_id else None
         admin_role = guild.get_role(ADMIN_ROLE_ID)
 
-        # 일반 유저 권한 설정 (사진/파일 허용, 챗 가능, 링크 허용, 반응 불가, 타서버 이모지 가능)
         user_overwrite = discord.PermissionOverwrite(
             read_messages=True,
             send_messages=True,
@@ -105,7 +104,6 @@ class TicketModal(discord.ui.Modal):
             use_external_emojis=True
         )
 
-        # 스태프/봇 권한 설정
         staff_overwrite = discord.PermissionOverwrite(
             read_messages=True,
             send_messages=True,
@@ -175,11 +173,17 @@ class CloseConfirmView(discord.ui.View):
         channel = interaction.channel
         closed_category = interaction.guild.get_channel(CLOSED_CATEGORY_ID)
         
+        # 질문 메시지 삭제
+        await interaction.message.delete()
+
+        # 카테고리 이동
         if closed_category:
             await channel.edit(category=closed_category)
 
         embed = discord.Embed(title="지원 팀 티켓 관리", color=0x2b2d31)
-        await interaction.response.send_message(
+        
+        # 답장 형태가 아닌 일반 메세지로 채널에 전송
+        await channel.send(
             content=f"Ticket Closed by {interaction.user.mention}",
             embed=embed,
             view=ClosedTicketView()
@@ -187,7 +191,11 @@ class CloseConfirmView(discord.ui.View):
 
     @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary, custom_id="btn_cancel_close")
     async def cancel_close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("티켓 닫기를 취소했습니다.")
+        # 질문 메시지 삭제
+        await interaction.message.delete()
+
+        # 나에게만 보이는 메세지로 응답
+        await interaction.response.send_message("티켓 닫기를 취소했습니다.", ephemeral=True)
 
 class TicketControlView(discord.ui.View):
     def __init__(self, user_id: int, seller: str):
@@ -302,7 +310,6 @@ async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
         return
 
-    # 일반 유저의 디스코드 초대 링크 차단 및 자동 삭제
     if re.search(DISCORD_INVITE_REGEX, message.content):
         user_role_ids = [r.id for r in message.author.roles]
         if ADMIN_ROLE_ID not in user_role_ids and not any(r_id in user_role_ids for r_id in ROLE_IDS.values()) and not message.author.guild_permissions.administrator:
@@ -312,7 +319,6 @@ async def on_message(message: discord.Message):
 
     await bot.process_commands(message)
 
-# 🔒 관리자만 티켓 생성 패널을 만들 수 있도록 권한 검사 추가
 @bot.tree.command(name="티켓생성", description="티켓 구매 패널을 생성합니다. (관리자 전용)")
 async def create_ticket(interaction: discord.Interaction):
     user_role_ids = [r.id for r in interaction.user.roles]
