@@ -5,6 +5,7 @@ import re
 import traceback
 from flask import Flask
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 # ==================== [ Railway Keep-Alive 웹서버 ] ====================
@@ -409,7 +410,7 @@ async def create_inquiry(interaction: discord.Interaction):
 
     embed = discord.Embed(
         title="📩 문의하기",
-        description="오류 문의, 기타 문의를 원하시면,\n아래 **선택하기** 버튼을 눌러주세요.",
+        description="오류 & 문의를 원하시면,\n아래 **선택하기** 버튼을 눌러주세요.",
         color=0x2b2d31
     )
     
@@ -423,6 +424,28 @@ async def create_inquiry(interaction: discord.Interaction):
     
     await interaction.channel.send(embed=embed, view=InquirySelectView())
     await interaction.response.send_message("문의 패널이 성공적으로 생성되었습니다.", ephemeral=True)
+
+# 3. /보내기 명령어 (원하는 메시지 전송 / 채널 선택 가능)
+@bot.tree.command(name="보내기", description="지정한 내용으로 메시지를 전송합니다. (채널 선택 가능)")
+@app_commands.describe(
+    내용="전송할 메시지 내용을 입력하세요. (\\n 으로 줄바꿈 가능)",
+    채널="메시지를 보낼 채널을 선택하세요. (미선택 시 현재 채널)"
+)
+async def send_message(
+    interaction: discord.Interaction, 
+    내용: str, 
+    채널: discord.TextChannel = None
+):
+    target_channel = 채널 if 채널 is not None else interaction.channel
+    
+    # \n 문자를 실제 줄바꿈으로 변환
+    formatted_content = 내용.replace("\\n", "\n")
+    
+    try:
+        await target_channel.send(formatted_content)
+        await interaction.response.send_message(f"✅ 메시지를 성공적으로 전송했습니다! ({target_channel.mention})", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ 메시지 전송 실패: {e}", ephemeral=True)
 
 if __name__ == "__main__":
     keep_alive()
