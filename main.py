@@ -409,7 +409,7 @@ async def create_inquiry(interaction: discord.Interaction):
 
     embed = discord.Embed(
         title="📩 문의하기",
-        description="오류 & 문의를 원하시면,\n아래 **선택하기** 버튼을 눌러주세요.",
+        description="오류 문의, 기타 문의를 원하시면,\n아래 **선택하기** 버튼을 눌러주세요.",
         color=0x2b2d31
     )
     
