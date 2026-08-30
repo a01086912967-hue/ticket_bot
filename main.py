@@ -1,4 +1,5 @@
 import os
+import asyncio
 import threading
 from flask import Flask
 import discord
@@ -61,7 +62,7 @@ class TicketModal(discord.ui.Modal):
 
         if category_type == "로벅스":
             self.q1 = discord.ui.TextInput(label="구매할 로벅스 수량을 입력해 주세요.", placeholder="예: 700")
-            self.q2 = discord.ui.TextInput(label="로벅스 지급방식을 선택해 주세요.", placeholder="예: 패스")
+            self.q2 = discord.ui.TextInput(label="로벅스 자급방식을 선택해 주세요.", placeholder="예: 패스")
             self.q3 = discord.ui.TextInput(label="로블 아이디를 입력해 주세요.", placeholder="예: Losenoman40")
             self.q4 = discord.ui.TextInput(label="구매할 아이템 이름을 적어주세요.", placeholder="예: 로벅스")
             for item in [self.q1, self.q2, self.q3, self.q4]:
@@ -110,19 +111,20 @@ class TicketModal(discord.ui.Modal):
             f"{interaction.user.mention}님 안녕하세요. 진행자가 곧 도착할 예정이에요.\n{role_mention}"
         )
 
+        # 질문 제목 유지 + 백틱(`) 적용
         embed = discord.Embed(color=0x2b2d31)
         if self.category_type == "로벅스":
-            embed.add_field(name="구매할 로벅스 개수", value=self.q1.value, inline=False)
-            embed.add_field(name="로벅스를 받을 닉네임", value=self.q3.value, inline=False)
-            embed.add_field(name="지급 방식", value=self.q2.value, inline=False)
-            embed.add_field(name="구매할 것", value=self.q4.value, inline=False)
+            embed.add_field(name="구매할 로벅스 수량을 입력해 주세요.", value=f"`{self.q1.value}`", inline=False)
+            embed.add_field(name="로벅스 자급방식을 선택해 주세요.", value=f"`{self.q2.value}`", inline=False)
+            embed.add_field(name="로블 아이디를 입력해 주세요.", value=f"`{self.q3.value}`", inline=False)
+            embed.add_field(name="구매할 아이템 이름을 적어주세요.", value=f"`{self.q4.value}`", inline=False)
         elif self.category_type == "인게임":
-            embed.add_field(name="구매할 아이템 이름", value=self.q1.value, inline=False)
-            embed.add_field(name="로블 아이디", value=self.q2.value, inline=False)
-            embed.add_field(name="구매할 아이템 수량", value=self.q3.value, inline=False)
+            embed.add_field(name="구매할 아이템 이름을 적어주세요.", value=f"`{self.q1.value}`", inline=False)
+            embed.add_field(name="로블 아이디를 입력해 주세요.", value=f"`{self.q2.value}`", inline=False)
+            embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"`{self.q3.value}`", inline=False)
         elif self.category_type == "기타":
-            embed.add_field(name="구매할 아이템 이름", value=self.q1.value, inline=False)
-            embed.add_field(name="구매할 아이템 수량", value=self.q2.value, inline=False)
+            embed.add_field(name="구매할 아이템의 이름을 적어주세요.", value=f"`{self.q1.value}`", inline=False)
+            embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"`{self.q2.value}`", inline=False)
 
         await ticket_channel.send(embed=embed, view=TicketControlView())
 
@@ -172,6 +174,8 @@ class ClosedTicketView(discord.ui.View):
 
     @discord.ui.button(label="티켓 삭제", style=discord.ButtonStyle.secondary, custom_id="btn_delete_ticket")
     async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("5초 후 티켓이 삭제됩니다.")
+        await asyncio.sleep(5)
         await interaction.channel.delete()
 
 # --- 3. 드롭다운 메뉴 ---
