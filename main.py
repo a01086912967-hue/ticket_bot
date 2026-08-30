@@ -107,23 +107,28 @@ class TicketModal(discord.ui.Modal):
         await interaction.response.send_message(f"티켓이 생성되었습니다: {ticket_channel.mention}", ephemeral=True)
 
         role_mention = role.mention if role else f"@{self.seller}"
-        await ticket_channel.send(
-            f"{interaction.user.mention}님 안녕하세요. 진행자가 곧 도착할 예정이에요.\n{role_mention}"
+        
+        # 1. 안내 임베드 (초록색 테두리) 생성 및 메시지 전송
+        notice_embed = discord.Embed(
+            description="관리자를 멘션 하였습니다.\n추가로 멘션 할 경우 처벌될 수 있습니다.",
+            color=0x2ecc71
         )
+        await ticket_channel.send(content=f"{interaction.user.mention} {role_mention}", embed=notice_embed)
 
+        # 2. 질문 답변 임베드 (백틱 3개 적용)
         embed = discord.Embed(color=0x2b2d31)
         if self.category_type == "로벅스":
-            embed.add_field(name="구매할 로벅스 수량을 입력해 주세요.", value=f"`{self.q1.value}`", inline=False)
-            embed.add_field(name="로벅스 자급방식을 선택해 주세요.", value=f"`{self.q2.value}`", inline=False)
-            embed.add_field(name="로블 아이디를 입력해 주세요.", value=f"`{self.q3.value}`", inline=False)
-            embed.add_field(name="구매할 아이템 이름을 적어주세요.", value=f"`{self.q4.value}`", inline=False)
+            embed.add_field(name="구매할 로벅스 수량을 입력해 주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
+            embed.add_field(name="로벅스 자급방식을 선택해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
+            embed.add_field(name="로블 아이디를 입력해 주세요.", value=f"```\n{self.q3.value}\n```", inline=False)
+            embed.add_field(name="구매할 아이템 이름을 적어주세요.", value=f"```\n{self.q4.value}\n```", inline=False)
         elif self.category_type == "인게임":
-            embed.add_field(name="구매할 아이템 이름을 적어주세요.", value=f"`{self.q1.value}`", inline=False)
-            embed.add_field(name="로블 아이디를 입력해 주세요.", value=f"`{self.q2.value}`", inline=False)
-            embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"`{self.q3.value}`", inline=False)
+            embed.add_field(name="구매할 아이템 이름을 적어주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
+            embed.add_field(name="로블 아이디를 입력해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
+            embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q3.value}\n```", inline=False)
         elif self.category_type == "기타":
-            embed.add_field(name="구매할 아이템의 이름을 적어주세요.", value=f"`{self.q1.value}`", inline=False)
-            embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"`{self.q2.value}`", inline=False)
+            embed.add_field(name="구매할 아이템의 이름을 적어주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
+            embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
 
         await ticket_channel.send(embed=embed, view=TicketControlView())
 
@@ -239,10 +244,7 @@ async def on_ready():
 async def create_ticket(interaction: discord.Interaction):
     embed = discord.Embed(title="🛒 구매 티켓 문의", description="아래 메뉴에서 원하는 판매자를 선택해 주세요.", color=0x2b2d31)
     
-    # 1. 해당 채널에 누구나 보는 공개 패널 메시지 전송
     await interaction.channel.send(embed=embed, view=MainTicketView())
-    
-    # 2. 명령어를 실행한 사용자에게만 보이는 비밀 확인 메시지 전송
     await interaction.response.send_message("패널이 생성되었어요.", ephemeral=True)
 
 if __name__ == "__main__":
