@@ -107,30 +107,33 @@ class TicketModal(discord.ui.Modal):
         await interaction.response.send_message(f"티켓이 생성되었습니다: {ticket_channel.mention}", ephemeral=True)
 
         role_mention = role.mention if role else f"@{self.seller}"
-        
-        # 1. 안내 임베드 (초록색 테두리) 생성 및 메시지 전송
+
+        # 1) 안내 임베드 (초록색 테두리)
         notice_embed = discord.Embed(
             description="관리자를 멘션 하였습니다.\n추가로 멘션 할 경우 처벌될 수 있습니다.",
             color=0x2ecc71
         )
-        await ticket_channel.send(content=f"{interaction.user.mention} {role_mention}", embed=notice_embed)
 
-        # 2. 질문 답변 임베드 (백틱 3개 적용)
-        embed = discord.Embed(color=0x2b2d31)
+        # 2) 질문 답변 임베드 (백틱 3개 적용)
+        info_embed = discord.Embed(color=0x2b2d31)
         if self.category_type == "로벅스":
-            embed.add_field(name="구매할 로벅스 수량을 입력해 주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
-            embed.add_field(name="로벅스 자급방식을 선택해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
-            embed.add_field(name="로블 아이디를 입력해 주세요.", value=f"```\n{self.q3.value}\n```", inline=False)
-            embed.add_field(name="구매할 아이템 이름을 적어주세요.", value=f"```\n{self.q4.value}\n```", inline=False)
+            info_embed.add_field(name="구매할 로벅스 수량을 입력해 주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
+            info_embed.add_field(name="로벅스 자급방식을 선택해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
+            info_embed.add_field(name="로블 아이디를 입력해 주세요.", value=f"```\n{self.q3.value}\n```", inline=False)
+            info_embed.add_field(name="구매할 아이템 이름을 적어주세요.", value=f"```\n{self.q4.value}\n```", inline=False)
         elif self.category_type == "인게임":
-            embed.add_field(name="구매할 아이템 이름을 적어주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
-            embed.add_field(name="로블 아이디를 입력해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
-            embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q3.value}\n```", inline=False)
+            info_embed.add_field(name="구매할 아이템 이름을 적어주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
+            info_embed.add_field(name="로블 아이디를 입력해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
+            info_embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q3.value}\n```", inline=False)
         elif self.category_type == "기타":
-            embed.add_field(name="구매할 아이템의 이름을 적어주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
-            embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
+            info_embed.add_field(name="구매할 아이템의 이름을 적어주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
+            info_embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
 
-        await ticket_channel.send(embed=embed, view=TicketControlView())
+        await ticket_channel.send(
+            content=f"{interaction.user.mention} {role_mention}",
+            embeds=[notice_embed, info_embed],
+            view=TicketControlView()
+        )
 
 # --- 2. 닫기 관련 컨트롤 ---
 class CloseConfirmView(discord.ui.View):
@@ -154,7 +157,7 @@ class CloseConfirmView(discord.ui.View):
 
     @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary, custom_id="btn_cancel_close")
     async def cancel_close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("티켓 닫기를 취소했습니다.", ephemeral=True)
+        await interaction.response.send_message("티켓 닫기를 취소했습니다.")
 
 class TicketControlView(discord.ui.View):
     def __init__(self):
@@ -162,10 +165,10 @@ class TicketControlView(discord.ui.View):
 
     @discord.ui.button(label="🔒 닫기", style=discord.ButtonStyle.secondary, custom_id="btn_open_close_confirm")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 전체 공개 메시지로 전송 (ephemeral 제거)
         await interaction.response.send_message(
             "**티켓을 닫으시겠습니까?**",
-            view=CloseConfirmView(),
-            ephemeral=True
+            view=CloseConfirmView()
         )
 
 class ClosedTicketView(discord.ui.View):
@@ -174,7 +177,7 @@ class ClosedTicketView(discord.ui.View):
 
     @discord.ui.button(label="티켓 다시 열기", style=discord.ButtonStyle.secondary, custom_id="btn_reopen_ticket")
     async def reopen_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("티켓을 다시 열었습니다.", ephemeral=True)
+        await interaction.response.send_message("티켓을 다시 열었습니다.")
 
     @discord.ui.button(label="티켓 삭제", style=discord.ButtonStyle.secondary, custom_id="btn_delete_ticket")
     async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
