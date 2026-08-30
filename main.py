@@ -24,13 +24,25 @@ def keep_alive():
     t.daemon = True
     t.start()
 
-# ==================== [ ID 및 설정 구간 ] ====================
+# ==================== [ ID 및 이모지 설정 구간 ] ====================
 ROLE_IDS = {
     "소뚜": 1543547595350220810,
     "3월": 1543547471756787722,
     "쥬스": 1543547625977151628,
     "유키": 1543547960422572053
 }
+
+# 알림 역할 ID
+NOTIFICATION_ROLES = {
+    "roblox": 1393460612046000218,  # 로벅스 알림
+    "ingame": 1393460552327499867,  # 인게임 알림
+    "event": 1461769960014741587    # 이벤트 알림
+}
+
+# 커스텀 이모지 설정
+EMOJI_BUX = "<:bux_purple:1461792088718053569>"
+EMOJI_MONEY = "<a:Money:1373524938723557507>"
+EMOJI_GIFT = "<a:Gift_box:1373525157163040770>"
 
 # 관리자 역할 ID
 ADMIN_ROLE_ID = 1396885435850162317
@@ -47,7 +59,7 @@ INQUIRY_CATEGORY_ID = 1463905394618536008
 
 CLOSED_CATEGORY_ID = 1516393469436887160
 
-# 이미지 URL (첨부하신 인형 이미지 직링크 URL 입력)
+# 이미지 URL
 LOGO_ICON_URL = "YOUR_IMAGE_URL_HERE" 
 # =========================================================
 
@@ -61,6 +73,7 @@ class TicketBot(commands.Bot):
     async def setup_hook(self):
         self.add_view(MainTicketView())
         self.add_view(InquirySelectView())
+        self.add_view(NotificationRoleView())
         self.add_view(TicketControlView(user_id=0, seller="", is_inquiry=False))
         self.add_view(TicketControlView(user_id=0, seller="", is_inquiry=True))
         self.add_view(ClosedTicketView())
@@ -108,7 +121,6 @@ class TicketModal(discord.ui.Modal):
         try:
             guild = interaction.guild
             
-            # 카테고리 지정
             category = None
             if self.is_inquiry:
                 category = guild.get_channel(INQUIRY_CATEGORY_ID)
@@ -120,7 +132,6 @@ class TicketModal(discord.ui.Modal):
             if not category and interaction.channel:
                 category = interaction.channel.category
 
-            # 역할 및 권한 설정
             role_id = ROLE_IDS.get(self.seller)
             role = guild.get_role(role_id) if role_id else None
             admin_role = guild.get_role(ADMIN_ROLE_ID)
@@ -157,7 +168,6 @@ class TicketModal(discord.ui.Modal):
 
             channel_prefix = "inquiry" if self.is_inquiry else "ticket"
             
-            # 텍스트 채널 생성
             ticket_channel = await guild.create_text_channel(
                 name=f"{channel_prefix}-{interaction.user.name}",
                 category=category,
@@ -242,7 +252,6 @@ class TicketControlView(discord.ui.View):
         self.seller = seller
         self.is_inquiry = is_inquiry
 
-        # 일반 문의 티켓일 경우 지급완료 버튼 제거
         if is_inquiry:
             for item in list(self.children):
                 if getattr(item, 'custom_id', None) == "btn_complete_payout":
@@ -290,7 +299,37 @@ class ClosedTicketView(discord.ui.View):
         await asyncio.sleep(5)
         await interaction.channel.delete()
 
-# --- 3. 드롭다운 및 패널 뷰 ---
+# --- 3. 알림 역할 뷰 ---
+class NotificationRoleView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def toggle_role(self, interaction: discord.Interaction, role_id: int, role_name: str):
+        role = interaction.guild.get_role(role_id)
+        if not role:
+            await interaction.response.send_message("❌ 역할을 찾을 수 없습니다. 서버 설정을 확인해 주세요.", ephemeral=True)
+            return
+
+        if role in interaction.user.roles:
+            await interaction.user.remove_roles(role)
+            await interaction.response.send_message(f"🔕 **{role_name}** 역할을 해제했습니다.", ephemeral=True)
+        else:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"🔔 **{role_name}** 역할을 지급받았습니다.", ephemeral=True)
+
+    @discord.ui.button(label="로벅스 알림", emoji=discord.PartialEmoji.from_str(EMOJI_BUX), style=discord.ButtonStyle.blurple, custom_id="btn_role_roblox")
+    async def btn_roblox(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.toggle_role(interaction, NOTIFICATION_ROLES["roblox"], "로벅스 알림")
+
+    @discord.ui.button(label="인게임 알림", emoji=discord.PartialEmoji.from_str(EMOJI_MONEY), style=discord.ButtonStyle.blurple, custom_id="btn_role_ingame")
+    async def btn_ingame(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.toggle_role(interaction, NOTIFICATION_ROLES["ingame"], "인게임 알림")
+
+    @discord.ui.button(label="이벤트 알림", emoji=discord.PartialEmoji.from_str(EMOJI_GIFT), style=discord.ButtonStyle.blurple, custom_id="btn_role_event")
+    async def btn_event(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.toggle_role(interaction, NOTIFICATION_ROLES["event"], "이벤트 알림")
+
+# --- 4. 드롭다운 및 패널 뷰 ---
 class TypeSelect(discord.ui.Select):
     def __init__(self, seller: str):
         self.seller = seller
@@ -341,7 +380,6 @@ class MainTicketView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(SellerSelect())
 
-# 문의 전용 드롭다운
 class InquiryDropdown(discord.ui.Select):
     def __init__(self):
         options = [
@@ -359,7 +397,7 @@ class InquirySelectView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(InquiryDropdown())
 
-# --- 4. 이벤트 및 슬래시 명령어 ---
+# --- 5. 이벤트 및 슬래시 명령어 ---
 DISCORD_INVITE_REGEX = r"(discord\.gg\/[a-zA-Z0-9]+|discord\.com\/invite\/[a-zA-Z0-9]+)"
 
 @bot.event
@@ -425,7 +463,35 @@ async def create_inquiry(interaction: discord.Interaction):
     await interaction.channel.send(embed=embed, view=InquirySelectView())
     await interaction.response.send_message("문의 패널이 성공적으로 생성되었습니다.", ephemeral=True)
 
-# 3. /보내기 명령어 (원하는 메시지 전송 / 채널 선택 가능)
+# 3. 알림 설정 패널 생성 (관리자 전용)
+@bot.tree.command(name="알림생성", description="알림 역할 받기 패널을 생성합니다. (관리자 전용)")
+async def create_notification_panel(interaction: discord.Interaction):
+    user_role_ids = [r.id for r in interaction.user.roles]
+
+    if ADMIN_ROLE_ID not in user_role_ids and not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ 이 명령어는 관리자만 사용할 수 있습니다.", ephemeral=True)
+        return
+
+    description_text = (
+        "아래 희망하는 알림을 받아보세요!\n\n"
+        f"{EMOJI_BUX} ≫ **로벅스 입고 알림**\n"
+        "↳ 로벅스 재고 입고 시 알림이 제공됩니다.\n\n"
+        f"{EMOJI_MONEY} ≫ **인게임 상품 입고 알림**\n"
+        "↳ 인게임 상품 재고 입고 시 알림이 제공됩니다.\n\n"
+        f"{EMOJI_GIFT} ≫ **이벤트 알림**\n"
+        "↳ 주요 이벤트 및 공지사항 알림이 제공됩니다."
+    )
+
+    embed = discord.Embed(
+        title="입고 알림 받기 🔔",
+        description=description_text,
+        color=0x2b2d31
+    )
+
+    await interaction.channel.send(embed=embed, view=NotificationRoleView())
+    await interaction.response.send_message("알림 설정 패널이 성공적으로 생성되었습니다.", ephemeral=True)
+
+# 4. /보내기 명령어 (원하는 메시지 전송 / 채널 선택 가능)
 @bot.tree.command(name="보내기", description="지정한 내용으로 메시지를 전송합니다. (채널 선택 가능)")
 @app_commands.describe(
     내용="전송할 메시지 내용을 입력하세요. (\\n 으로 줄바꿈 가능)",
@@ -437,8 +503,6 @@ async def send_message(
     채널: discord.TextChannel = None
 ):
     target_channel = 채널 if 채널 is not None else interaction.channel
-    
-    # \n 문자를 실제 줄바꿈으로 변환
     formatted_content = 내용.replace("\\n", "\n")
     
     try:
