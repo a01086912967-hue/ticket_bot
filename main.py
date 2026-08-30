@@ -1,6 +1,7 @@
 import os
 import asyncio
 import threading
+import re
 from flask import Flask
 import discord
 from discord.ext import commands
@@ -93,15 +94,37 @@ class TicketModal(discord.ui.Modal):
         role = guild.get_role(role_id) if role_id else None
         admin_role = guild.get_role(ADMIN_ROLE_ID)
 
+        # 일반 유저 권한 설정 (사진/파일 허용, 챗 가능, 링크 허용, 반응 불가, 타서버 이모지 가능)
+        user_overwrite = discord.PermissionOverwrite(
+            read_messages=True,
+            send_messages=True,
+            attach_files=True,
+            embed_links=True,
+            read_message_history=True,
+            add_reactions=False,
+            use_external_emojis=True
+        )
+
+        # 스태프/봇 권한 설정
+        staff_overwrite = discord.PermissionOverwrite(
+            read_messages=True,
+            send_messages=True,
+            attach_files=True,
+            embed_links=True,
+            read_message_history=True,
+            add_reactions=True,
+            use_external_emojis=True
+        )
+
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            interaction.user: user_overwrite,
+            guild.me: staff_overwrite
         }
         if role:
-            overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            overwrites[role] = staff_overwrite
         if admin_role:
-            overwrites[admin_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            overwrites[admin_role] = staff_overwrite
 
         channel_name = f"ticket-{interaction.user.name}"
         ticket_channel = await guild.create_text_channel(
@@ -117,13 +140,11 @@ class TicketModal(discord.ui.Modal):
 
         content_text = f"{interaction.user.mention}님 안녕하세요\n{role_mention}님 이(가) 도착할 예정이에요.\n{admin_mention}"
 
-        # 1) 안내 임베드 (초록색 테두리)
         notice_embed = discord.Embed(
             description="관리자를 멘션 하였습니다.\n추가로 멘션 할 경우 처벌될 수 있습니다.",
             color=0x2ecc71
         )
 
-        # 2) 질문 답변 임베드 (백틱 3개 적용)
         info_embed = discord.Embed(color=0x2b2d31)
         if self.category_type == "로벅스":
             info_embed.add_field(name="구매할 로벅스 수량을 입력해 주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
@@ -144,7 +165,7 @@ class TicketModal(discord.ui.Modal):
             view=TicketControlView(user_id=interaction.user.id, seller=self.seller)
         )
 
-# --- 2. 컨트롤 버튼 (🔒 닫기 / 🎁 지급완료) ---
+# --- 2. 컨트롤 버튼 ---
 class CloseConfirmView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -181,10 +202,8 @@ class TicketControlView(discord.ui.View):
             view=CloseConfirmView()
         )
 
-    # 버튼 스타일을 닫기와 동일한 회색(secondary)으로 변경
     @discord.ui.button(label="🎁 지급완료", style=discord.ButtonStyle.secondary, custom_id="btn_complete_payout")
     async def complete_payout(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 권한 확인: 관리자 역할이나 선택된 판매자 역할을 가졌는지 검사
         seller_role_id = ROLE_IDS.get(self.seller)
         user_role_ids = [r.id for r in interaction.user.roles]
 
@@ -194,7 +213,6 @@ class TicketControlView(discord.ui.View):
 
         target_user = f"<@{self.user_id}>" if self.user_id else interaction.channel.name.replace("ticket-", "")
 
-        # 임베드 색상을 어두운 검정 계열(0x2b2d31)로 변경
         complete_embed = discord.Embed(
             description="**아이템이 정상적으로 지급되었어요. <a:Gzest001:1452891675625259122>\n<#1395743402456383631> 작성은 필수입니다.**",
             color=0x2b2d31
@@ -268,6 +286,8 @@ class MainTicketView(discord.ui.View):
         self.add_item(SellerSelect())
 
 # --- 4. 이벤트 및 명령어 ---
+DISCORD_INVITE_REGEX = r"(discord\.gg\/[a-zA-Z0-9]+|discord\.com\/invite\/[a-zA-Z0-9]+)"
+
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name}")
@@ -277,12 +297,34 @@ async def on_ready():
     except Exception as e:
         print(e)
 
-@bot.tree.command(name="티켓생성", description="티켓 구매 패널을 생성합니다.")
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot or not message.guild:
+        return
+
+    # 일반 유저의 디스코드 초대 링크 차단 및 자동 삭제
+    if re.search(DISCORD_INVITE_REGEX, message.content):
+        user_role_ids = [r.id for r in message.author.roles]
+        if ADMIN_ROLE_ID not in user_role_ids and not any(r_id in user_role_ids for r_id in ROLE_IDS.values()) and not message.author.guild_permissions.administrator:
+            await message.delete()
+            await message.channel.send(f"{message.author.mention}님, 디스코드 초대 링크는 전송할 수 없습니다.", delete_after=5)
+            return
+
+    await bot.process_commands(message)
+
+# 🔒 관리자만 티켓 생성 패널을 만들 수 있도록 권한 검사 추가
+@bot.tree.command(name="티켓생성", description="티켓 구매 패널을 생성합니다. (관리자 전용)")
 async def create_ticket(interaction: discord.Interaction):
+    user_role_ids = [r.id for r in interaction.user.roles]
+
+    if ADMIN_ROLE_ID not in user_role_ids and not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ 이 명령어는 관리자만 사용할 수 있습니다.", ephemeral=True)
+        return
+
     embed = discord.Embed(title="🛒 구매 티켓 문의", description="아래 메뉴에서 원하는 판매자를 선택해 주세요.", color=0x2b2d31)
     
     await interaction.channel.send(embed=embed, view=MainTicketView())
-    await interaction.response.send_message("패널이 생성되었어요.", ephemeral=True)
+    await interaction.response.send_message("패널이 성공적으로 생성되었습니다.", ephemeral=True)
 
 if __name__ == "__main__":
     keep_alive()
