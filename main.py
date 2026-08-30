@@ -2,6 +2,7 @@ import os
 import asyncio
 import threading
 import re
+import traceback
 from flask import Flask
 import discord
 from discord.ext import commands
@@ -45,8 +46,8 @@ INQUIRY_CATEGORY_ID = 1463905394618536008
 
 CLOSED_CATEGORY_ID = 1516393469436887160
 
-# 푸터 아이콘 이미지 URL (첨부하신 인형 이미지의 웹 직링크 URL을 입력해주세요)
-LOGO_ICON_URL = "YOUR_IMAGE_URL_HERE" 
+# 푸터 아이콘 이미지 URL
+LOGO_ICON_URL = "https://cdn.discordapp.com/embed/avatars/0.png" 
 # =========================================================
 
 intents = discord.Intents.default()
@@ -101,92 +102,106 @@ class TicketModal(discord.ui.Modal):
             self.add_item(self.q1)
 
     async def on_submit(self, interaction: discord.Interaction):
-        guild = interaction.guild
-        
-        # 문의 유형인 경우 전용 문의 카테고리 ID 지정
-        if self.category_type == "문의":
-            category = guild.get_channel(INQUIRY_CATEGORY_ID)
-        else:
-            cat_id = CATEGORY_IDS.get(self.seller, {}).get(self.category_type)
-            category = guild.get_channel(cat_id) if cat_id else interaction.channel.category
+        try:
+            guild = interaction.guild
+            
+            # 카테고리 지정
+            category = None
+            if self.category_type == "문의":
+                category = guild.get_channel(INQUIRY_CATEGORY_ID)
+            else:
+                cat_id = CATEGORY_IDS.get(self.seller, {}).get(self.category_type)
+                if cat_id:
+                    category = guild.get_channel(cat_id)
+            
+            if not category and interaction.channel:
+                category = interaction.channel.category
 
-        role_id = ROLE_IDS.get(self.seller)
-        role = guild.get_role(role_id) if role_id else None
-        admin_role = guild.get_role(ADMIN_ROLE_ID)
+            # 역할 및 권한 설정
+            role_id = ROLE_IDS.get(self.seller)
+            role = guild.get_role(role_id) if role_id else None
+            admin_role = guild.get_role(ADMIN_ROLE_ID)
 
-        user_overwrite = discord.PermissionOverwrite(
-            read_messages=True,
-            send_messages=True,
-            attach_files=True,
-            embed_links=True,
-            read_message_history=True,
-            add_reactions=False,
-            use_external_emojis=True
-        )
+            user_overwrite = discord.PermissionOverwrite(
+                read_messages=True,
+                send_messages=True,
+                attach_files=True,
+                embed_links=True,
+                read_message_history=True,
+                add_reactions=False,
+                use_external_emojis=True
+            )
 
-        staff_overwrite = discord.PermissionOverwrite(
-            read_messages=True,
-            send_messages=True,
-            attach_files=True,
-            embed_links=True,
-            read_message_history=True,
-            add_reactions=True,
-            use_external_emojis=True
-        )
+            staff_overwrite = discord.PermissionOverwrite(
+                read_messages=True,
+                send_messages=True,
+                attach_files=True,
+                embed_links=True,
+                read_message_history=True,
+                add_reactions=True,
+                use_external_emojis=True
+            )
 
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            interaction.user: user_overwrite,
-            guild.me: staff_overwrite
-        }
-        if role:
-            overwrites[role] = staff_overwrite
-        if admin_role:
-            overwrites[admin_role] = staff_overwrite
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                interaction.user: user_overwrite,
+                guild.me: staff_overwrite
+            }
+            if role:
+                overwrites[role] = staff_overwrite
+            if admin_role:
+                overwrites[admin_role] = staff_overwrite
 
-        channel_prefix = "inquiry" if self.category_type == "문의" else "ticket"
-        ticket_channel = await guild.create_text_channel(
-            name=f"{channel_prefix}-{interaction.user.name}",
-            category=category,
-            overwrites=overwrites
-        )
+            channel_prefix = "inquiry" if self.category_type == "문의" else "ticket"
+            
+            # 텍스트 채널 생성
+            ticket_channel = await guild.create_text_channel(
+                name=f"{channel_prefix}-{interaction.user.name}",
+                category=category,
+                overwrites=overwrites
+            )
 
-        await interaction.response.send_message(f"티켓이 생성되었습니다: {ticket_channel.mention}", ephemeral=True)
+            await interaction.response.send_message(f"티켓이 생성되었습니다: {ticket_channel.mention}", ephemeral=True)
 
-        admin_mention = admin_role.mention if admin_role else f"<@&{ADMIN_ROLE_ID}>"
+            admin_mention = admin_role.mention if admin_role else f"<@&{ADMIN_ROLE_ID}>"
 
-        if self.category_type == "문의":
-            content_text = f"{interaction.user.mention}님 안녕하세요.\n잠시 뒤 {admin_mention}가 올 예정이에요."
-        else:
-            role_mention = role.mention if role else f"@{self.seller}"
-            content_text = f"{interaction.user.mention}님 안녕하세요\n{role_mention}님 이(가) 도착할 예정이에요.\n{admin_mention}"
+            if self.category_type == "문의":
+                content_text = f"{interaction.user.mention}님 안녕하세요.\n잠시 뒤 {admin_mention}가 올 예정이에요."
+            else:
+                role_mention = role.mention if role else f"@{self.seller}"
+                content_text = f"{interaction.user.mention}님 안녕하세요\n{role_mention}님 이(가) 도착할 예정이에요.\n{admin_mention}"
 
-        notice_embed = discord.Embed(
-            description="관리자를 멘션 하였습니다.\n추가로 멘션 할 경우 처벌될 수 있습니다.",
-            color=0x2ecc71
-        )
+            notice_embed = discord.Embed(
+                description="관리자를 멘션 하였습니다.\n추가로 멘션 할 경우 처벌될 수 있습니다.",
+                color=0x2ecc71
+            )
 
-        info_embed = discord.Embed(color=0x2b2d31)
-        if self.category_type == "로벅스":
-            info_embed.add_field(name="구매할 로벅스 수량을 입력해 주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
-            info_embed.add_field(name="로벅스 자급방식을 선택해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
-            info_embed.add_field(name="로블 아이디를 입력해 주세요.", value=f"```\n{self.q3.value}\n```", inline=False)
-            info_embed.add_field(name="구매할 아이템 이름을 적어주세요.", value=f"```\n{self.q4.value}\n```", inline=False)
-        elif self.category_type == "인게임":
-            info_embed.add_field(name="구매할 아이템 이름을 적어주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
-            info_embed.add_field(name="로블 아이디를 입력해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
-            info_embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q3.value}\n```", inline=False)
-        elif self.category_type == "기타":
-            info_embed.add_field(name="구매할 아이템의 이름을 적어주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
-            info_embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
-        elif self.category_type == "문의":
-            info_embed.add_field(name="문의 내용", value=f"```\n{self.q1.value}\n```", inline=False)
+            info_embed = discord.Embed(color=0x2b2d31)
+            if self.category_type == "로벅스":
+                info_embed.add_field(name="구매할 로벅스 수량을 입력해 주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
+                info_embed.add_field(name="로벅스 자급방식을 선택해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
+                info_embed.add_field(name="로블 아이디를 입력해 주세요.", value=f"```\n{self.q3.value}\n```", inline=False)
+                info_embed.add_field(name="구매할 아이템 이름을 적어주세요.", value=f"```\n{self.q4.value}\n```", inline=False)
+            elif self.category_type == "인게임":
+                info_embed.add_field(name="구매할 아이템 이름을 적어주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
+                info_embed.add_field(name="로블 아이디를 입력해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
+                info_embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q3.value}\n```", inline=False)
+            elif self.category_type == "기타":
+                info_embed.add_field(name="구매할 아이템의 이름을 적어주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
+                info_embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
+            elif self.category_type == "문의":
+                info_embed.add_field(name="문의 내용", value=f"```\n{self.q1.value}\n```", inline=False)
 
-        await ticket_channel.send(
-            content=content_text,
-            embeds=[notice_embed, info_embed],
-            view=TicketControlView(user_id=interaction.user.id, seller=self.seller)
-        )
+            await ticket_channel.send(
+                content=content_text,
+                embeds=[notice_embed, info_embed],
+                view=TicketControlView(user_id=interaction.user.id, seller=self.seller)
+            )
+        except Exception as e:
+            print(f"Error creating ticket: {e}")
+            traceback.print_exc()
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"❌ 티켓 생성 중 오류가 발생했습니다: {e}", ephemeral=True)
 
 # --- 2. 컨트롤 버튼 및 닫기 처리 ---
 class CloseConfirmView(discord.ui.View):
@@ -379,10 +394,15 @@ async def create_inquiry(interaction: discord.Interaction):
         description="오류 & 문의를 원하시면,\n아래 **선택하기** 버튼을 눌러주세요.",
         color=0x2b2d31
     )
-    embed.set_footer(
-        text="𝐋𝐈𝐌𝐈𝐓𝐄𝐃 SHOP - Ticket tool",
-        icon_url=LOGO_ICON_URL
-    )
+    
+    # LOGO_ICON_URL이 올바르지 않아도 에러가 나지 않도록 처리
+    if LOGO_ICON_URL and LOGO_ICON_URL.startswith("http"):
+        embed.set_footer(
+            text="𝐋𝐈𝐌𝐈𝐓𝐄𝐃 SHOP - Ticket tool",
+            icon_url=LOGO_ICON_URL
+        )
+    else:
+        embed.set_footer(text="𝐋𝐈𝐌𝐈𝐓𝐄𝐃 SHOP - Ticket tool")
     
     await interaction.channel.send(embed=embed, view=InquiryTicketView())
     await interaction.response.send_message("문의 패널이 성공적으로 생성되었습니다.", ephemeral=True)
