@@ -46,8 +46,8 @@ INQUIRY_CATEGORY_ID = 1463905394618536008
 
 CLOSED_CATEGORY_ID = 1516393469436887160
 
-# 푸터 아이콘 이미지 URL
-LOGO_ICON_URL = "https://cdn.discordapp.com/embed/avatars/0.png" 
+# 이미지 URL (첨부하신 인형 이미지 직링크 URL 입력)
+LOGO_ICON_URL = "YOUR_IMAGE_URL_HERE" 
 # =========================================================
 
 intents = discord.Intents.default()
@@ -59,18 +59,20 @@ class TicketBot(commands.Bot):
 
     async def setup_hook(self):
         self.add_view(MainTicketView())
-        self.add_view(InquiryTicketView())
-        self.add_view(TicketControlView(user_id=0, seller=""))
+        self.add_view(InquirySelectView())
+        self.add_view(TicketControlView(user_id=0, seller="", is_inquiry=False))
+        self.add_view(TicketControlView(user_id=0, seller="", is_inquiry=True))
         self.add_view(ClosedTicketView())
 
 bot = TicketBot()
 
 # --- 1. 모달 (양식 입력) ---
 class TicketModal(discord.ui.Modal):
-    def __init__(self, seller: str, category_type: str):
+    def __init__(self, seller: str, category_type: str, is_inquiry: bool = False):
         super().__init__(title=f"{category_type} 양식")
         self.seller = seller
         self.category_type = category_type
+        self.is_inquiry = is_inquiry
 
         if category_type == "로벅스":
             self.q1 = discord.ui.TextInput(label="구매할 로벅스 수량을 입력해 주세요.", placeholder="예: 700")
@@ -93,7 +95,7 @@ class TicketModal(discord.ui.Modal):
             for item in [self.q1, self.q2]:
                 self.add_item(item)
 
-        elif category_type == "문의":
+        else: # 문의 관련
             self.q1 = discord.ui.TextInput(
                 label="문의하실 내용을 구체적으로 작성해 주세요.",
                 style=discord.TextStyle.paragraph,
@@ -107,7 +109,7 @@ class TicketModal(discord.ui.Modal):
             
             # 카테고리 지정
             category = None
-            if self.category_type == "문의":
+            if self.is_inquiry:
                 category = guild.get_channel(INQUIRY_CATEGORY_ID)
             else:
                 cat_id = CATEGORY_IDS.get(self.seller, {}).get(self.category_type)
@@ -152,7 +154,7 @@ class TicketModal(discord.ui.Modal):
             if admin_role:
                 overwrites[admin_role] = staff_overwrite
 
-            channel_prefix = "inquiry" if self.category_type == "문의" else "ticket"
+            channel_prefix = "inquiry" if self.is_inquiry else "ticket"
             
             # 텍스트 채널 생성
             ticket_channel = await guild.create_text_channel(
@@ -165,7 +167,7 @@ class TicketModal(discord.ui.Modal):
 
             admin_mention = admin_role.mention if admin_role else f"<@&{ADMIN_ROLE_ID}>"
 
-            if self.category_type == "문의":
+            if self.is_inquiry:
                 content_text = f"{interaction.user.mention}님 안녕하세요.\n잠시 뒤 {admin_mention}가 올 예정이에요."
             else:
                 role_mention = role.mention if role else f"@{self.seller}"
@@ -189,13 +191,13 @@ class TicketModal(discord.ui.Modal):
             elif self.category_type == "기타":
                 info_embed.add_field(name="구매할 아이템의 이름을 적어주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
                 info_embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
-            elif self.category_type == "문의":
+            else:
                 info_embed.add_field(name="문의 내용", value=f"```\n{self.q1.value}\n```", inline=False)
 
             await ticket_channel.send(
                 content=content_text,
                 embeds=[notice_embed, info_embed],
-                view=TicketControlView(user_id=interaction.user.id, seller=self.seller)
+                view=TicketControlView(user_id=interaction.user.id, seller=self.seller, is_inquiry=self.is_inquiry)
             )
         except Exception as e:
             print(f"Error creating ticket: {e}")
@@ -233,10 +235,17 @@ class CloseConfirmView(discord.ui.View):
         await interaction.response.send_message("티켓 닫기를 취소했습니다.", ephemeral=True)
 
 class TicketControlView(discord.ui.View):
-    def __init__(self, user_id: int, seller: str):
+    def __init__(self, user_id: int, seller: str, is_inquiry: bool = False):
         super().__init__(timeout=None)
         self.user_id = user_id
         self.seller = seller
+        self.is_inquiry = is_inquiry
+
+        # 일반 문의 티켓일 경우 지급완료 버튼 제거
+        if is_inquiry:
+            for item in list(self.children):
+                if getattr(item, 'custom_id', None) == "btn_complete_payout":
+                    self.remove_item(item)
 
     @discord.ui.button(label="🔒 닫기", style=discord.ButtonStyle.secondary, custom_id="btn_open_close_confirm")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -299,7 +308,8 @@ class TypeSelect(discord.ui.Select):
         super().__init__(placeholder="구매 또는 문의 유형을 선택해 주세요.", options=options, custom_id=f"select_type_{seller}")
 
     async def callback(self, interaction: discord.Interaction):
-        modal = TicketModal(seller=self.seller, category_type=self.values[0])
+        is_inquiry = (self.values[0] == "문의")
+        modal = TicketModal(seller=self.seller, category_type=self.values[0], is_inquiry=is_inquiry)
         await interaction.response.send_modal(modal)
 
 class TypeSelectView(discord.ui.View):
@@ -330,15 +340,23 @@ class MainTicketView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(SellerSelect())
 
-# 단독 문의 버튼 패널
-class InquiryTicketView(discord.ui.View):
+# 문의 전용 드롭다운
+class InquiryDropdown(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="오류 문의하기", value="오류 문의하기"),
+            discord.SelectOption(label="기타 사항 문의하기", value="기타 사항 문의하기")
+        ]
+        super().__init__(placeholder="선택하기", options=options, custom_id="select_inquiry_option")
+
+    async def callback(self, interaction: discord.Interaction):
+        modal = TicketModal(seller="일반문의", category_type=self.values[0], is_inquiry=True)
+        await interaction.response.send_modal(modal)
+
+class InquirySelectView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-
-    @discord.ui.button(label="📩 선택하기", style=discord.ButtonStyle.primary, custom_id="btn_general_inquiry")
-    async def open_inquiry(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = TicketModal(seller="일반문의", category_type="문의")
-        await interaction.response.send_modal(modal)
+        self.add_item(InquiryDropdown())
 
 # --- 4. 이벤트 및 슬래시 명령어 ---
 DISCORD_INVITE_REGEX = r"(discord\.gg\/[a-zA-Z0-9]+|discord\.com\/invite\/[a-zA-Z0-9]+)"
@@ -395,7 +413,6 @@ async def create_inquiry(interaction: discord.Interaction):
         color=0x2b2d31
     )
     
-    # LOGO_ICON_URL이 올바르지 않아도 에러가 나지 않도록 처리
     if LOGO_ICON_URL and LOGO_ICON_URL.startswith("http"):
         embed.set_footer(
             text="𝐋𝐈𝐌𝐈𝐓𝐄𝐃 SHOP - Ticket tool",
@@ -404,7 +421,7 @@ async def create_inquiry(interaction: discord.Interaction):
     else:
         embed.set_footer(text="𝐋𝐈𝐌𝐈𝐓𝐄𝐃 SHOP - Ticket tool")
     
-    await interaction.channel.send(embed=embed, view=InquiryTicketView())
+    await interaction.channel.send(embed=embed, view=InquirySelectView())
     await interaction.response.send_message("문의 패널이 성공적으로 생성되었습니다.", ephemeral=True)
 
 if __name__ == "__main__":
