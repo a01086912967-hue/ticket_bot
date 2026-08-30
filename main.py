@@ -181,7 +181,8 @@ class TicketControlView(discord.ui.View):
             view=CloseConfirmView()
         )
 
-    @discord.ui.button(label="🎁 지급완료", style=discord.ButtonStyle.success, custom_id="btn_complete_payout")
+    # 버튼 스타일을 닫기와 동일한 회색(secondary)으로 변경
+    @discord.ui.button(label="🎁 지급완료", style=discord.ButtonStyle.secondary, custom_id="btn_complete_payout")
     async def complete_payout(self, interaction: discord.Interaction, button: discord.ui.Button):
         # 권한 확인: 관리자 역할이나 선택된 판매자 역할을 가졌는지 검사
         seller_role_id = ROLE_IDS.get(self.seller)
@@ -191,12 +192,12 @@ class TicketControlView(discord.ui.View):
             await interaction.response.send_message("이 버튼을 사용할 수 있는 권한이 없습니다.", ephemeral=True)
             return
 
-        # 티켓 생성 유저 멘션 대상 추출
         target_user = f"<@{self.user_id}>" if self.user_id else interaction.channel.name.replace("ticket-", "")
 
+        # 임베드 색상을 어두운 검정 계열(0x2b2d31)로 변경
         complete_embed = discord.Embed(
             description="**아이템이 정상적으로 지급되었어요. <a:Gzest001:1452891675625259122>\n<#1395743402456383631> 작성은 필수입니다.**",
-            color=0x2ecc71
+            color=0x2b2d31
         )
 
         await interaction.response.send_message(
