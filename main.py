@@ -173,16 +173,16 @@ class CloseConfirmView(discord.ui.View):
         channel = interaction.channel
         closed_category = interaction.guild.get_channel(CLOSED_CATEGORY_ID)
         
-        # 질문 메시지 삭제
         await interaction.message.delete()
 
-        # 카테고리 이동
+        # 🔒 티켓 생성 유저의 채널 읽기 권한을 박탈하여 유저 목록에서 안 보이게 설정
+        await channel.set_permissions(interaction.user, read_messages=False, send_messages=False)
+
         if closed_category:
             await channel.edit(category=closed_category)
 
         embed = discord.Embed(title="지원 팀 티켓 관리", color=0x2b2d31)
         
-        # 답장 형태가 아닌 일반 메세지로 채널에 전송
         await channel.send(
             content=f"Ticket Closed by {interaction.user.mention}",
             embed=embed,
@@ -191,10 +191,7 @@ class CloseConfirmView(discord.ui.View):
 
     @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary, custom_id="btn_cancel_close")
     async def cancel_close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 질문 메시지 삭제
         await interaction.message.delete()
-
-        # 나에게만 보이는 메세지로 응답
         await interaction.response.send_message("티켓 닫기를 취소했습니다.", ephemeral=True)
 
 class TicketControlView(discord.ui.View):
@@ -237,6 +234,7 @@ class ClosedTicketView(discord.ui.View):
 
     @discord.ui.button(label="티켓 다시 열기", style=discord.ButtonStyle.secondary, custom_id="btn_reopen_ticket")
     async def reopen_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 다시 열 때 채널 권한도 원복
         await interaction.response.send_message("티켓을 다시 열었습니다.")
 
     @discord.ui.button(label="티켓 삭제", style=discord.ButtonStyle.secondary, custom_id="btn_delete_ticket")
