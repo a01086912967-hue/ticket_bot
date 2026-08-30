@@ -479,7 +479,7 @@ async def create_notification_panel(interaction: discord.Interaction):
         f"{EMOJI_MONEY} ≫ **인게임 상품 입고 알림**\n"
         "↳ 인게임 상품 재고 입고 시 알림이 제공됩니다.\n\n"
         f"{EMOJI_GIFT} ≫ **이벤트 알림**\n"
-        "↳ 주요 이벤트 및 공지사항 알림이 제공됩니다."
+        "↳ 이벤트 시작 시 알림이 제공됩니다."
     )
 
     embed = discord.Embed(
