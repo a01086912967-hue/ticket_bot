@@ -76,7 +76,7 @@ class TicketBot(commands.Bot):
         self.add_view(NotificationRoleView())
         self.add_view(TicketControlView(user_id=0, seller="", is_inquiry=False))
         self.add_view(TicketControlView(user_id=0, seller="", is_inquiry=True))
-        self.add_view(ClosedTicketView())
+        self.add_view(ClosedTicketView(original_category_id=None, original_name=""))
 
 bot = TicketBot()
 
@@ -132,8 +132,6 @@ class TicketModal(discord.ui.Modal):
             if not category and interaction.channel:
                 category = interaction.channel.category
 
-            role_id = ROLE_IDS.get(self.seller)
-            role = guild.get_role(role_id) if role_id else None
             admin_role = guild.get_role(ADMIN_ROLE_ID)
 
             user_overwrite = discord.PermissionOverwrite(
@@ -161,8 +159,14 @@ class TicketModal(discord.ui.Modal):
                 interaction.user: user_overwrite,
                 guild.me: staff_overwrite
             }
-            if role:
-                overwrites[role] = staff_overwrite
+            
+            # 일반 구매 티켓일 때만 판매자 역할에 채널 조회 권한 부여 (문의 티켓에는 차단)
+            if not self.is_inquiry:
+                role_id = ROLE_IDS.get(self.seller)
+                role = guild.get_role(role_id) if role_id else None
+                if role:
+                    overwrites[role] = staff_overwrite
+
             if admin_role:
                 overwrites[admin_role] = staff_overwrite
 
@@ -181,6 +185,8 @@ class TicketModal(discord.ui.Modal):
             if self.is_inquiry:
                 content_text = f"{interaction.user.mention}님 안녕하세요.\n잠시 뒤 {admin_mention}가 올 예정이에요."
             else:
+                role_id = ROLE_IDS.get(self.seller)
+                role = guild.get_role(role_id) if role_id else None
                 role_mention = role.mention if role else f"@{self.seller}"
                 content_text = f"{interaction.user.mention}님 안녕하세요\n{role_mention}님 이(가) 도착할 예정이에요.\n{admin_mention}"
 
@@ -218,26 +224,37 @@ class TicketModal(discord.ui.Modal):
 
 # --- 2. 컨트롤 버튼 및 닫기 처리 ---
 class CloseConfirmView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, original_category_id: int = None, original_name: str = ""):
         super().__init__(timeout=None)
+        self.original_category_id = original_category_id
+        self.original_name = original_name
 
     @discord.ui.button(label="닫기", style=discord.ButtonStyle.red, custom_id="btn_confirm_close")
     async def confirm_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         channel = interaction.channel
-        closed_category = interaction.guild.get_channel(CLOSED_CATEGORY_ID)
         
-        await interaction.message.delete()
-        await channel.set_permissions(interaction.user, read_messages=False, send_messages=False)
+        orig_cat_id = self.original_category_id or (channel.category_id if channel.category else None)
+        orig_name = self.original_name or channel.name
 
+        closed_category = interaction.guild.get_channel(CLOSED_CATEGORY_ID)
+        user_name = orig_name.replace("ticket-", "").replace("inquiry-", "").replace("closed-", "")
+        new_channel_name = f"closed-{user_name}"
+
+        await interaction.message.delete()
+
+        # 채널 명 변경 및 이동
+        edit_kwargs = {"name": new_channel_name}
         if closed_category:
-            await channel.edit(category=closed_category)
+            edit_kwargs["category"] = closed_category
+        await channel.edit(**edit_kwargs)
 
         embed = discord.Embed(title="지원 팀 티켓 관리", color=0x2b2d31)
         
         await channel.send(
             content=f"Ticket Closed by {interaction.user.mention}",
             embed=embed,
-            view=ClosedTicketView()
+            view=ClosedTicketView(original_category_id=orig_cat_id, original_name=orig_name)
         )
 
     @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary, custom_id="btn_cancel_close")
@@ -259,9 +276,12 @@ class TicketControlView(discord.ui.View):
 
     @discord.ui.button(label="🔒 닫기", style=discord.ButtonStyle.secondary, custom_id="btn_open_close_confirm")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        orig_cat_id = interaction.channel.category_id if interaction.channel.category else None
+        orig_name = interaction.channel.name
+        
         await interaction.response.send_message(
             "**티켓을 닫으시겠습니까?**",
-            view=CloseConfirmView()
+            view=CloseConfirmView(original_category_id=orig_cat_id, original_name=orig_name)
         )
 
     @discord.ui.button(label="🎁 지급완료", style=discord.ButtonStyle.secondary, custom_id="btn_complete_payout")
@@ -273,7 +293,7 @@ class TicketControlView(discord.ui.View):
             await interaction.response.send_message("이 버튼을 사용할 수 있는 권한이 없습니다.", ephemeral=True)
             return
 
-        target_user = f"<@{self.user_id}>" if self.user_id else interaction.channel.name.replace("ticket-", "").replace("inquiry-", "")
+        target_user = f"<@{self.user_id}>" if self.user_id else interaction.channel.name.replace("ticket-", "").replace("inquiry-", "").replace("closed-", "")
 
         complete_embed = discord.Embed(
             description="**아이템이 정상적으로 지급되었어요. <a:Gzest001:1452891675625259122>\n<#1395743402456383631> 작성은 필수입니다.**",
@@ -286,12 +306,30 @@ class TicketControlView(discord.ui.View):
         )
 
 class ClosedTicketView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, original_category_id: int = None, original_name: str = ""):
         super().__init__(timeout=None)
+        self.original_category_id = original_category_id
+        self.original_name = original_name
 
     @discord.ui.button(label="티켓 다시 열기", style=discord.ButtonStyle.secondary, custom_id="btn_reopen_ticket")
     async def reopen_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("티켓을 다시 열었습니다.")
+        await interaction.response.defer()
+        channel = interaction.channel
+        
+        edit_kwargs = {}
+        if self.original_category_id:
+            orig_category = interaction.guild.get_channel(self.original_category_id)
+            if orig_category:
+                edit_kwargs["category"] = orig_category
+
+        if self.original_name:
+            edit_kwargs["name"] = self.original_name
+        else:
+            edit_kwargs["name"] = channel.name.replace("closed-", "ticket-")
+
+        await channel.edit(**edit_kwargs)
+        await interaction.message.delete()
+        await channel.send("티켓을 다시 열었습니다.")
 
     @discord.ui.button(label="티켓 삭제", style=discord.ButtonStyle.secondary, custom_id="btn_delete_ticket")
     async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -343,13 +381,11 @@ class TypeSelect(discord.ui.Select):
         elif seller == "유키":
             options = [discord.SelectOption(label="로벅스 구매하기", value="로벅스")]
 
-        options.append(discord.SelectOption(label="문의하기", value="문의"))
-
-        super().__init__(placeholder="구매 또는 문의 유형을 선택해 주세요.", options=options, custom_id=f"select_type_{seller}")
+        # custom_id를 명시하지 않아야 동적으로 새로운 옵션이 즉시 반영됩니다.
+        super().__init__(placeholder="구매 유형을 선택해 주세요.", options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        is_inquiry = (self.values[0] == "문의")
-        modal = TicketModal(seller=self.seller, category_type=self.values[0], is_inquiry=is_inquiry)
+        modal = TicketModal(seller=self.seller, category_type=self.values[0], is_inquiry=False)
         await interaction.response.send_modal(modal)
 
 class TypeSelectView(discord.ui.View):
@@ -491,7 +527,7 @@ async def create_notification_panel(interaction: discord.Interaction):
     await interaction.channel.send(embed=embed, view=NotificationRoleView())
     await interaction.response.send_message("알림 설정 패널이 성공적으로 생성되었습니다.", ephemeral=True)
 
-# 4. /보내기 명령어 (원하는 메시지 전송 / 채널 선택 가능)
+# 4. /보내기 명령어
 @bot.tree.command(name="보내기", description="지정한 내용으로 메시지를 전송합니다. (채널 선택 가능)")
 @app_commands.describe(
     내용="전송할 메시지 내용을 입력하세요. (\\n 으로 줄바꿈 가능)",
