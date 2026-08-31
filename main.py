@@ -61,6 +61,10 @@ CLOSED_CATEGORY_ID = 1516393469436887160
 
 # 이미지 URL
 LOGO_ICON_URL = "YOUR_IMAGE_URL_HERE" 
+
+# 티켓 카운터 (글로벌 락 및 시작 번호)
+TICKET_COUNTER = 3600
+counter_lock = asyncio.Lock()
 # =========================================================
 
 intents = discord.Intents.default()
@@ -79,6 +83,22 @@ class TicketBot(commands.Bot):
         self.add_view(ClosedTicketView(original_category_id=None, original_name=""))
 
 bot = TicketBot()
+
+# 다음 티켓 번호 생성 함수
+async def get_next_ticket_number(guild: discord.Guild) -> int:
+    global TICKET_COUNTER
+    async with counter_lock:
+        highest = TICKET_COUNTER
+        for ch in guild.text_channels:
+            match = re.search(r'\d+', ch.name)
+            if match:
+                num = int(match.group())
+                if num >= highest:
+                    highest = num + 1
+        TICKET_COUNTER = max(TICKET_COUNTER, highest)
+        num_to_use = TICKET_COUNTER
+        TICKET_COUNTER += 1
+        return num_to_use
 
 # --- 1. 모달 (양식 입력) ---
 class TicketModal(discord.ui.Modal):
@@ -160,7 +180,6 @@ class TicketModal(discord.ui.Modal):
                 guild.me: staff_overwrite
             }
             
-            # 일반 구매 티켓일 때만 판매자 역할에 채널 조회 권한 부여 (문의 티켓에는 차단)
             if not self.is_inquiry:
                 role_id = ROLE_IDS.get(self.seller)
                 role = guild.get_role(role_id) if role_id else None
@@ -170,10 +189,13 @@ class TicketModal(discord.ui.Modal):
             if admin_role:
                 overwrites[admin_role] = staff_overwrite
 
+            # 채널명을 숫자(3600번~) 기반으로 설정
+            ticket_num = await get_next_ticket_number(guild)
             channel_prefix = "inquiry" if self.is_inquiry else "ticket"
+            channel_name = f"{channel_prefix}-{ticket_num}"
             
             ticket_channel = await guild.create_text_channel(
-                name=f"{channel_prefix}-{interaction.user.name}",
+                name=channel_name,
                 category=category,
                 overwrites=overwrites
             )
@@ -207,7 +229,7 @@ class TicketModal(discord.ui.Modal):
                 info_embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q3.value}\n```", inline=False)
             elif self.category_type == "기타":
                 info_embed.add_field(name="구매할 아이템의 이름을 적어주세요.", value=f"```\n{self.q1.value}\n```", inline=False)
-                info_embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q2.value}\n```", inline=False)
+                info_embed.add_field(name="구매할 아이템의 수량을 입력해 주세요.", value=f"```\n{self.q3.value}\n```", inline=False)
             else:
                 info_embed.add_field(name="문의 내용", value=f"```\n{self.q1.value}\n```", inline=False)
 
@@ -238,22 +260,38 @@ class CloseConfirmView(discord.ui.View):
         orig_name = self.original_name or channel.name
 
         closed_category = interaction.guild.get_channel(CLOSED_CATEGORY_ID)
-        user_name = orig_name.replace("ticket-", "").replace("inquiry-", "").replace("closed-", "")
-        new_channel_name = f"closed-{user_name}"
+        
+        # closed-XXXX 형태로 채널 이동
+        match = re.search(r'\d+', orig_name)
+        num_str = match.group() if match else orig_name
+        new_channel_name = f"closed-{num_str}"
 
         await interaction.message.delete()
 
-        # 채널 명 변경 및 이동
         edit_kwargs = {"name": new_channel_name}
         if closed_category:
             edit_kwargs["category"] = closed_category
         await channel.edit(**edit_kwargs)
 
-        embed = discord.Embed(title="지원 팀 티켓 관리", color=0x2b2d31)
+        # 1) 닫기 완료 알림 임베드 (빨간색)
+        close_embed = discord.Embed(
+            title="🔒 티켓이 닫혔습니다",
+            description=f"**{interaction.user.mention}** 님이 티켓을 닫았습니다.",
+            color=0xe74c3c
+        )
+
+        # 2) 3개 박스로 구성된 관리자 티켓 관리 임베드 (검은색/다크)
+        admin_embed = discord.Embed(
+            title="🛠️ 관리자 티켓 관리",
+            description="티켓 관리 및 후속 조치를 진행해 주세요.",
+            color=0x2b2d31
+        )
+        admin_embed.add_field(name="📌 티켓 정보", value=f"```\n원래 이름: {orig_name}\n```", inline=False)
+        admin_embed.add_field(name="👤 처리 관리자", value=f"```\n{interaction.user.display_name} ({interaction.user.id})\n```", inline=False)
+        admin_embed.add_field(name="⚙️ 이용 가능 작업", value="```\n아래 버튼을 이용해 티켓을 다시 열거나 삭제할 수 있습니다.\n```", inline=False)
         
         await channel.send(
-            content=f"Ticket Closed by {interaction.user.mention}",
-            embed=embed,
+            embeds=[close_embed, admin_embed],
             view=ClosedTicketView(original_category_id=orig_cat_id, original_name=orig_name)
         )
 
@@ -293,14 +331,18 @@ class TicketControlView(discord.ui.View):
             await interaction.response.send_message("이 버튼을 사용할 수 있는 권한이 없습니다.", ephemeral=True)
             return
 
-        target_user = f"<@{self.user_id}>" if self.user_id else interaction.channel.name.replace("ticket-", "").replace("inquiry-", "").replace("closed-", "")
+        # 1회 클릭 후 비활성화 처리
+        button.disabled = True
+        await interaction.response.edit_message(view=self)
+
+        target_user = f"<@{self.user_id}>" if self.user_id else ""
 
         complete_embed = discord.Embed(
             description="**아이템이 정상적으로 지급되었어요. <a:Gzest001:1452891675625259122>\n<#1395743402456383631> 작성은 필수입니다.**",
             color=0x2b2d31
         )
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             content=f"{target_user}",
             embed=complete_embed
         )
@@ -329,7 +371,14 @@ class ClosedTicketView(discord.ui.View):
 
         await channel.edit(**edit_kwargs)
         await interaction.message.delete()
-        await channel.send("티켓을 다시 열었습니다.")
+
+        # 티켓 다시 열기 알림 임베드 (연두색)
+        reopen_embed = discord.Embed(
+            title="🔓 티켓이 다시 열렸습니다",
+            description=f"**{interaction.user.mention}** 님에 의해 티켓이 다시 열렸습니다.",
+            color=0x2ecc71
+        )
+        await channel.send(embed=reopen_embed)
 
     @discord.ui.button(label="티켓 삭제", style=discord.ButtonStyle.secondary, custom_id="btn_delete_ticket")
     async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -381,7 +430,6 @@ class TypeSelect(discord.ui.Select):
         elif seller == "유키":
             options = [discord.SelectOption(label="로벅스 구매하기", value="로벅스")]
 
-        # custom_id를 명시하지 않아야 동적으로 새로운 옵션이 즉시 반영됩니다.
         super().__init__(placeholder="구매 유형을 선택해 주세요.", options=options)
 
     async def callback(self, interaction: discord.Interaction):
