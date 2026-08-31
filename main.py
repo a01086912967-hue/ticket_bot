@@ -126,33 +126,28 @@ class TicketModal(discord.ui.Modal):
 
             admin_role = guild.get_role(ADMIN_ROLE_ID)
 
-            # 티켓 신청 유저 권한
             user_overwrite = discord.PermissionOverwrite(
                 view_channel=True, read_messages=True, send_messages=True, attach_files=True,
                 embed_links=True, read_message_history=True, add_reactions=False, use_external_emojis=True
             )
 
-            # 관리자 및 담당자 권한
             staff_overwrite = discord.PermissionOverwrite(
                 view_channel=True, read_messages=True, send_messages=True, attach_files=True,
                 embed_links=True, read_message_history=True, add_reactions=True, use_external_emojis=True
             )
 
-            # 기본 권한 차단 설정 (@everyone 완전 비공개)
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(view_channel=False, read_messages=False),
                 interaction.user: user_overwrite,
                 guild.me: staff_overwrite
             }
             
-            # 일반 문의가 아닌 구매 티켓인 경우 해당 판매자 역할 추가
             if not self.is_inquiry:
                 role_id = ROLE_IDS.get(self.seller)
                 role = guild.get_role(role_id) if role_id else None
                 if role:
                     overwrites[role] = staff_overwrite
 
-            # 최고 관리자 역할 추가
             if admin_role:
                 overwrites[admin_role] = staff_overwrite
 
@@ -197,10 +192,18 @@ class TicketModal(discord.ui.Modal):
             else:
                 info_embed.add_field(name="문의 내용", value=f"```\n{self.q1.value}\n```", inline=False)
 
+            # 생성될 때 원래 카테고리 ID 저장
+            orig_cat_id = category.id if category else None
             await ticket_channel.send(
                 content=content_text,
                 embeds=[notice_embed, info_embed],
-                view=TicketControlView(user_id=interaction.user.id, seller=self.seller, is_inquiry=self.is_inquiry)
+                view=TicketControlView(
+                    user_id=interaction.user.id, 
+                    seller=self.seller, 
+                    is_inquiry=self.is_inquiry,
+                    original_category_id=orig_cat_id,
+                    original_name=channel_name
+                )
             )
         except Exception as e:
             print(f"Error creating ticket: {e}")
@@ -210,21 +213,26 @@ class TicketModal(discord.ui.Modal):
 
 # --- 2. 컨트롤 버튼 및 닫기/재오픈 처리 ---
 class CloseConfirmView(discord.ui.View):
-    def __init__(self, original_category_id: int = None, original_name: str = ""):
+    def __init__(self, original_category_id: int = None, original_name: str = "", seller: str = "", user_id: int = 0, is_inquiry: bool = False):
         super().__init__(timeout=None)
         self.original_category_id = original_category_id
         self.original_name = original_name
+        self.seller = seller
+        self.user_id = user_id
+        self.is_inquiry = is_inquiry
 
-    @discord.ui.button(label="닫기", style=discord.ButtonStyle.red, custom_id="btn_confirm_close")
+    @discord.ui.button(label="닫기", style=discord.ButtonStyle.red, custom_id="btn_confirm_close_act")
     async def confirm_close(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         channel = interaction.channel
         
         orig_cat_id = self.original_category_id or (channel.category_id if channel.category else None)
-        orig_name = self.original_name or channel.name
+        
+        orig_name = self.original_name
+        if not orig_name or orig_name.startswith("closed-"):
+            orig_name = channel.name.replace("closed-", "")
 
         closed_category = interaction.guild.get_channel(CLOSED_CATEGORY_ID)
-        
         new_channel_name = f"closed-{orig_name}"
 
         try:
@@ -232,10 +240,14 @@ class CloseConfirmView(discord.ui.View):
         except:
             pass
 
-        edit_kwargs = {"name": new_channel_name}
-        if closed_category:
-            edit_kwargs["category"] = closed_category
-        await channel.edit(**edit_kwargs)
+        # 채널 이동 및 이름 변경
+        try:
+            if closed_category:
+                await channel.edit(name=new_channel_name, category=closed_category)
+            else:
+                await channel.edit(name=new_channel_name)
+        except Exception as e:
+            print(f"Error closing channel: {e}")
 
         close_embed = discord.Embed(
             title="🔒 티켓이 닫혔습니다",
@@ -253,10 +265,16 @@ class CloseConfirmView(discord.ui.View):
         
         await channel.send(
             embeds=[close_embed, admin_embed],
-            view=ClosedTicketView(original_category_id=orig_cat_id, original_name=orig_name)
+            view=ClosedTicketView(
+                original_category_id=orig_cat_id, 
+                original_name=orig_name,
+                seller=self.seller,
+                user_id=self.user_id,
+                is_inquiry=self.is_inquiry
+            )
         )
 
-    @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary, custom_id="btn_cancel_close")
+    @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary, custom_id="btn_cancel_close_act")
     async def cancel_close(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             await interaction.message.delete()
@@ -265,23 +283,33 @@ class CloseConfirmView(discord.ui.View):
         await interaction.response.send_message("티켓 닫기를 취소했습니다.", ephemeral=True)
 
 class TicketControlView(discord.ui.View):
-    def __init__(self, user_id: int = 0, seller: str = "", is_inquiry: bool = False):
+    def __init__(self, user_id: int = 0, seller: str = "", is_inquiry: bool = False, original_category_id: int = None, original_name: str = ""):
         super().__init__(timeout=None)
         self.user_id = user_id
         self.seller = seller
         self.is_inquiry = is_inquiry
+        self.original_category_id = original_category_id
+        self.original_name = original_name
 
-    @discord.ui.button(label="🔒 닫기", style=discord.ButtonStyle.secondary, custom_id="btn_open_close_confirm")
+    @discord.ui.button(label="🔒 닫기", style=discord.ButtonStyle.secondary, custom_id="btn_open_close_confirm_act")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        orig_cat_id = interaction.channel.category_id if interaction.channel.category else None
-        orig_name = interaction.channel.name
-        
+        orig_cat_id = self.original_category_id or (interaction.channel.category_id if interaction.channel.category else None)
+        orig_name = self.original_name or interaction.channel.name
+        if orig_name.startswith("closed-"):
+            orig_name = orig_name.replace("closed-", "")
+
         await interaction.response.send_message(
             "**티켓을 닫으시겠습니까?**",
-            view=CloseConfirmView(original_category_id=orig_cat_id, original_name=orig_name)
+            view=CloseConfirmView(
+                original_category_id=orig_cat_id, 
+                original_name=orig_name,
+                seller=self.seller,
+                user_id=self.user_id,
+                is_inquiry=self.is_inquiry
+            )
         )
 
-    @discord.ui.button(label="🎁 지급완료", style=discord.ButtonStyle.secondary, custom_id="btn_complete_payout")
+    @discord.ui.button(label="🎁 지급완료", style=discord.ButtonStyle.secondary, custom_id="btn_complete_payout_act")
     async def complete_payout(self, interaction: discord.Interaction, button: discord.ui.Button):
         seller_role_id = ROLE_IDS.get(self.seller)
         user_role_ids = [r.id for r in interaction.user.roles]
@@ -306,29 +334,34 @@ class TicketControlView(discord.ui.View):
         )
 
 class ClosedTicketView(discord.ui.View):
-    def __init__(self, original_category_id: int = None, original_name: str = ""):
+    def __init__(self, original_category_id: int = None, original_name: str = "", seller: str = "", user_id: int = 0, is_inquiry: bool = False):
         super().__init__(timeout=None)
         self.original_category_id = original_category_id
         self.original_name = original_name
+        self.seller = seller
+        self.user_id = user_id
+        self.is_inquiry = is_inquiry
 
-    @discord.ui.button(label="티켓 다시 열기", style=discord.ButtonStyle.secondary, custom_id="btn_reopen_ticket")
+    @discord.ui.button(label="티켓 다시 열기", style=discord.ButtonStyle.secondary, custom_id="btn_reopen_ticket_act")
     async def reopen_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         channel = interaction.channel
         
-        edit_kwargs = {}
-        if self.original_category_id:
-            orig_category = interaction.guild.get_channel(self.original_category_id)
-            if orig_category:
-                edit_kwargs["category"] = orig_category
-
         target_name = self.original_name
         if not target_name:
             target_name = channel.name.replace("closed-", "")
 
-        edit_kwargs["name"] = target_name
+        orig_category = None
+        if self.original_category_id:
+            orig_category = interaction.guild.get_channel(self.original_category_id)
 
-        await channel.edit(**edit_kwargs)
+        try:
+            if orig_category:
+                await channel.edit(name=target_name, category=orig_category)
+            else:
+                await channel.edit(name=target_name)
+        except Exception as e:
+            print(f"Error reopening channel: {e}")
         
         try:
             await interaction.message.delete()
@@ -337,18 +370,32 @@ class ClosedTicketView(discord.ui.View):
 
         reopen_embed = discord.Embed(
             title="🔓 티켓이 다시 열렸습니다",
-            description=f"**{interaction.user.mention}** 님에 의해 티켓이 다시 열렸습니다.\n상단의 원래 컨트롤 버튼을 통해 티켓을 다시 닫으실 수 있습니다.",
+            description=f"**{interaction.user.mention}** 님에 의해 티켓이 다시 열렸습니다.",
             color=0x2ecc71
         )
-        await channel.send(embed=reopen_embed)
+        
+        # 다시 열릴 때 컨트롤 버튼 패널 새로 생성 전송 (열닫열닫 반복 가능하도록)
+        await channel.send(
+            embed=reopen_embed,
+            view=TicketControlView(
+                user_id=self.user_id,
+                seller=self.seller,
+                is_inquiry=self.is_inquiry,
+                original_category_id=self.original_category_id,
+                original_name=target_name
+            )
+        )
 
-    @discord.ui.button(label="티켓 삭제", style=discord.ButtonStyle.secondary, custom_id="btn_delete_ticket")
+    @discord.ui.button(label="티켓 삭제", style=discord.ButtonStyle.secondary, custom_id="btn_delete_ticket_act")
     async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("⏳ 10초 후 티켓이 삭제됩니다.")
         
         for i in range(9, 0, -1):
             await asyncio.sleep(1)
-            await interaction.edit_original_response(content=f"⏳ {i}초 후 티켓이 삭제됩니다.")
+            try:
+                await interaction.edit_original_response(content=f"⏳ {i}초 후 티켓이 삭제됩니다.")
+            except:
+                pass
             
         await asyncio.sleep(1)
         await interaction.channel.delete()
@@ -504,15 +551,15 @@ async def create_inquiry(interaction: discord.Interaction):
     )
     
     if LOGO_ICON_URL and LOGO_ICON_URL.startswith("http"):
-        embed.set_footer(text="𝐋𝐈𝐌𝐈𝐓𝐄𝐃 SHOP - Ticket tool", icon_url=LOGO_ICON_URL)
+        embed.set_footer(text="문의 시스템", icon_url=LOGO_ICON_URL)
     else:
-        embed.set_footer(text="𝐋𝐈𝐌𝐈𝐓𝐄𝐃 SHOP - Ticket tool")
-    
+        embed.set_footer(text="문의 시스템")
+
     await interaction.channel.send(embed=embed, view=InquirySelectView())
     await interaction.response.send_message("문의 패널이 성공적으로 생성되었습니다.", ephemeral=True)
 
-# 3. 알림 설정 패널 생성
-@bot.tree.command(name="알림생성", description="알림 역할 받기 패널을 생성합니다. (관리자 전용)")
+# 3. 알림 역할 패널 생성
+@bot.tree.command(name="알림역할생성", description="알림 역할을 받을 수 있는 패널을 생성합니다. (관리자 전용)")
 async def create_notification_panel(interaction: discord.Interaction):
     user_role_ids = [r.id for r in interaction.user.roles]
 
@@ -520,49 +567,19 @@ async def create_notification_panel(interaction: discord.Interaction):
         await interaction.response.send_message("❌ 이 명령어는 관리자만 사용할 수 있습니다.", ephemeral=True)
         return
 
-    description_text = (
-        "아래 희망하는 알림을 받아보세요!\n\n"
-        f"{EMOJI_BUX} ≫ **로벅스 입고 알림**\n"
-        "↳ 로벅스 재고 입고 시 알림이 제공됩니다.\n\n"
-        f"{EMOJI_MONEY} ≫ **인게임 상품 입고 알림**\n"
-        "↳ 인게임 상품 재고 입고 시 알림이 제공됩니다.\n\n"
-        f"{EMOJI_GIFT} ≫ **이벤트 알림**\n"
-        "↳ 이벤트 시작 시 알림이 제공됩니다."
-    )
-
     embed = discord.Embed(
-        title="입고 알림 받기 🔔",
-        description=description_text,
+        title="🔔 알림 역할 받기",
+        description="아래 버튼을 눌러 원하시는 알림 역할을 받거나 해제하실 수 있습니다.",
         color=0x2b2d31
     )
-
-    await interaction.channel.send(embed=embed, view=NotificationRoleView())
-    await interaction.response.send_message("알림 설정 패널이 성공적으로 생성되었습니다.", ephemeral=True)
-
-# 4. /보내기 명령어
-@bot.tree.command(name="보내기", description="지정한 내용으로 메시지를 전송합니다. (채널 선택 가능)")
-@app_commands.describe(
-    내용="전송할 메시지 내용을 입력하세요. (\\n 으로 줄바꿈 가능)",
-    채널="메시지를 보낼 채널을 선택하세요. (미선택 시 현재 채널)"
-)
-async def send_message(
-    interaction: discord.Interaction, 
-    내용: str, 
-    채널: discord.TextChannel = None
-):
-    target_channel = 채널 if 채널 is not None else interaction.channel
-    formatted_content = 내용.replace("\\n", "\n")
     
-    try:
-        await target_channel.send(formatted_content)
-        await interaction.response.send_message(f"✅ 메시지를 성공적으로 전송했습니다! ({target_channel.mention})", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"❌ 메시지 전송 실패: {e}", ephemeral=True)
+    await interaction.channel.send(embed=embed, view=NotificationRoleView())
+    await interaction.response.send_message("알림 역할 패널이 생성되었습니다.", ephemeral=True)
 
-if __name__ == "__main__":
-    keep_alive()
-    token = os.environ.get("DISCORD_TOKEN")
-    if token:
-        bot.run(token)
-    else:
-        print("ERROR: DISCORD_TOKEN 환경 변수를 찾을 수 없습니다.")
+# ==================== [ 실행 ] ====================
+keep_alive()
+TOKEN = os.environ.get("DISCORD_TOKEN")
+if TOKEN:
+    bot.run(TOKEN)
+else:
+    print("Error: DISCORD_TOKEN Environment Variable is missing.")
