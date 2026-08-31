@@ -189,7 +189,6 @@ class TicketModal(discord.ui.Modal):
             if admin_role:
                 overwrites[admin_role] = staff_overwrite
 
-            # 채널명을 숫자(3600번~) 기반으로 설정
             ticket_num = await get_next_ticket_number(guild)
             channel_prefix = "inquiry" if self.is_inquiry else "ticket"
             channel_name = f"{channel_prefix}-{ticket_num}"
@@ -261,26 +260,26 @@ class CloseConfirmView(discord.ui.View):
 
         closed_category = interaction.guild.get_channel(CLOSED_CATEGORY_ID)
         
-        # closed-XXXX 형태로 채널 이동
         match = re.search(r'\d+', orig_name)
         num_str = match.group() if match else orig_name
         new_channel_name = f"closed-{num_str}"
 
-        await interaction.message.delete()
+        try:
+            await interaction.message.delete()
+        except:
+            pass
 
         edit_kwargs = {"name": new_channel_name}
         if closed_category:
             edit_kwargs["category"] = closed_category
         await channel.edit(**edit_kwargs)
 
-        # 1) 닫기 완료 알림 임베드 (빨간색)
         close_embed = discord.Embed(
             title="🔒 티켓이 닫혔습니다",
             description=f"**{interaction.user.mention}** 님이 티켓을 닫았습니다.",
             color=0xe74c3c
         )
 
-        # 2) 3개 박스로 구성된 관리자 티켓 관리 임베드 (검은색/다크)
         admin_embed = discord.Embed(
             title="🛠️ 관리자 티켓 관리",
             description="티켓 관리 및 후속 조치를 진행해 주세요.",
@@ -297,11 +296,14 @@ class CloseConfirmView(discord.ui.View):
 
     @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary, custom_id="btn_cancel_close")
     async def cancel_close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.message.delete()
+        try:
+            await interaction.message.delete()
+        except:
+            pass
         await interaction.response.send_message("티켓 닫기를 취소했습니다.", ephemeral=True)
 
 class TicketControlView(discord.ui.View):
-    def __init__(self, user_id: int, seller: str, is_inquiry: bool = False):
+    def __init__(self, user_id: int = 0, seller: str = "", is_inquiry: bool = False):
         super().__init__(timeout=None)
         self.user_id = user_id
         self.seller = seller
@@ -331,7 +333,6 @@ class TicketControlView(discord.ui.View):
             await interaction.response.send_message("이 버튼을 사용할 수 있는 권한이 없습니다.", ephemeral=True)
             return
 
-        # 1회 클릭 후 비활성화 처리
         button.disabled = True
         await interaction.response.edit_message(view=self)
 
@@ -364,21 +365,32 @@ class ClosedTicketView(discord.ui.View):
             if orig_category:
                 edit_kwargs["category"] = orig_category
 
-        if self.original_name:
-            edit_kwargs["name"] = self.original_name
-        else:
-            edit_kwargs["name"] = channel.name.replace("closed-", "ticket-")
+        target_name = self.original_name
+        if not target_name:
+            target_name = channel.name.replace("closed-", "ticket-")
+
+        edit_kwargs["name"] = target_name
 
         await channel.edit(**edit_kwargs)
-        await interaction.message.delete()
+        
+        try:
+            await interaction.message.delete()
+        except:
+            pass
 
-        # 티켓 다시 열기 알림 임베드 (연두색)
+        is_inquiry = "inquiry" in target_name.lower()
+
         reopen_embed = discord.Embed(
             title="🔓 티켓이 다시 열렸습니다",
             description=f"**{interaction.user.mention}** 님에 의해 티켓이 다시 열렸습니다.",
             color=0x2ecc71
         )
-        await channel.send(embed=reopen_embed)
+        
+        # 다시 열릴 때 컨트롤 버튼 뷰(TicketControlView)를 새로 생성하여 첨부
+        await channel.send(
+            embed=reopen_embed,
+            view=TicketControlView(is_inquiry=is_inquiry)
+        )
 
     @discord.ui.button(label="티켓 삭제", style=discord.ButtonStyle.secondary, custom_id="btn_delete_ticket")
     async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
