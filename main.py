@@ -53,7 +53,6 @@ CATEGORY_IDS = {
 
 INQUIRY_CATEGORY_ID = 1463905394618536008
 CLOSED_CATEGORY_ID = 1516393469436887160
-LOGO_ICON_URL = "YOUR_IMAGE_URL_HERE" 
 # =========================================================
 
 intents = discord.Intents.default()
@@ -67,13 +66,14 @@ class TicketBot(commands.Bot):
         self.add_view(MainTicketView())
         self.add_view(InquirySelectView())
         self.add_view(NotificationRoleView())
-        self.add_view(TicketControlView())
+        self.add_view(BuyTicketControlView())
+        self.add_view(InquiryTicketControlView())
         self.add_view(CloseConfirmView())
         self.add_view(ClosedTicketView())
 
 bot = TicketBot()
 
-# --- 헬퍼 함수: 채널 토픽 파싱 ---
+# --- Topic 데이터 파싱/생성 헬퍼 ---
 def parse_topic_data(topic: str):
     data = {}
     if not topic:
@@ -88,12 +88,12 @@ def parse_topic_data(topic: str):
 def build_topic_data(owner_id: int, orig_cat_id: int, orig_name: str):
     return f"OWNER:{owner_id}|ORIG_CAT:{orig_cat_id}|ORIG_NAME:{orig_name}"
 
-# --- 1. 티켓 메인 컨트롤 뷰 (열림 상태) ---
-class TicketControlView(discord.ui.View):
+# --- 1-A. 구매 티켓 전용 컨트롤 뷰 (닫기 + 지급완료) ---
+class BuyTicketControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🔒 닫기", style=discord.ButtonStyle.secondary, custom_id="persistent_btn_close_ticket")
+    @discord.ui.button(label="🔒 닫기", style=discord.ButtonStyle.secondary, custom_id="persistent_btn_close_buy_ticket")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
             title="🔒 티켓을 닫으시겠습니까?",
@@ -110,11 +110,9 @@ class TicketControlView(discord.ui.View):
             await interaction.response.send_message("❌ 지급완료 처리 권한이 없습니다.", ephemeral=True)
             return
 
-        # 버튼 비활성화 (1회 클릭 제한)
         button.disabled = True
         await interaction.response.edit_message(view=self)
 
-        # 토픽에서 구매자 ID 추출하여 멘션
         topic_data = parse_topic_data(interaction.channel.topic)
         owner_id = topic_data.get("OWNER")
         mention_text = f"<@{owner_id}>" if owner_id else ""
@@ -125,6 +123,20 @@ class TicketControlView(discord.ui.View):
         )
         await interaction.followup.send(content=mention_text, embed=complete_embed)
 
+# --- 1-B. 문의 티켓 전용 컨트롤 뷰 (닫기 전용) ---
+class InquiryTicketControlView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🔒 닫기", style=discord.ButtonStyle.secondary, custom_id="persistent_btn_close_inquiry_ticket")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="🔒 티켓을 닫으시겠습니까?",
+            description="아래 **닫기** 버튼을 누르면 티켓이 마감 처리됩니다.",
+            color=0x2b2d31
+        )
+        await interaction.response.send_message(embed=embed, view=CloseConfirmView(), ephemeral=False)
+
 # --- 2. 닫기 확인 뷰 ---
 class CloseConfirmView(discord.ui.View):
     def __init__(self):
@@ -132,38 +144,38 @@ class CloseConfirmView(discord.ui.View):
 
     @discord.ui.button(label="닫기", style=discord.ButtonStyle.red, custom_id="persistent_btn_confirm_close")
     async def confirm_close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
         channel = interaction.channel
         guild = interaction.guild
 
-        # 닫기 확인 안내 메시지 삭제
+        # 닫기 확인 메시지 제거
         try:
             await interaction.message.delete()
         except:
             pass
 
         topic_data = parse_topic_data(channel.topic)
-        orig_name = topic_data.get("ORIG_NAME", channel.name.replace("closed-", ""))
-        
+        orig_name = topic_data.get("ORIG_NAME")
+        if not orig_name:
+            orig_name = channel.name.replace("closed-", "")
+
         closed_category = guild.get_channel(CLOSED_CATEGORY_ID)
         new_name = f"closed-{orig_name}"
 
-        # 마감 카테고리로 이동 및 채널명 변경
+        # 채널명 변경 및 마감 카테고리 이동
         try:
             if closed_category:
                 await channel.edit(name=new_name, category=closed_category)
             else:
                 await channel.edit(name=new_name)
         except Exception as e:
-            print(f"채널 닫기 중 오류: {e}")
+            print(f"닫기 처리 오류: {e}")
 
-        # 검정색 마감 안내 임베드
+        # 검정색 마감 임베드 생성
         black_embed = discord.Embed(
             title="🔒 티켓이 닫혔습니다",
             description=f"**{interaction.user.mention}** 님이 티켓을 닫았습니다.",
             color=0x2b2d31
         )
-
         await channel.send(embed=black_embed, view=ClosedTicketView())
 
     @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary, custom_id="persistent_btn_cancel_close")
@@ -181,32 +193,34 @@ class ClosedTicketView(discord.ui.View):
 
     @discord.ui.button(label="🔓 티켓 다시 열기", style=discord.ButtonStyle.secondary, custom_id="persistent_btn_reopen_ticket")
     async def reopen_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
         channel = interaction.channel
         guild = interaction.guild
 
         topic_data = parse_topic_data(channel.topic)
         orig_cat_id = topic_data.get("ORIG_CAT")
-        orig_name = topic_data.get("ORIG_NAME", channel.name.replace("closed-", ""))
+        orig_name = topic_data.get("ORIG_NAME")
 
-        orig_category = guild.get_channel(int(orig_cat_id)) if orig_cat_id else None
+        if not orig_name:
+            orig_name = channel.name.replace("closed-", "")
 
-        # 원래 카테고리 이동 및 채널 이름 복구
+        orig_category = guild.get_channel(int(orig_cat_id)) if orig_cat_id and orig_cat_id.isdigit() else None
+
+        # 원본 카테고리 이동 및 채널명 복구
         try:
             if orig_category:
                 await channel.edit(name=orig_name, category=orig_category)
             else:
                 await channel.edit(name=orig_name)
         except Exception as e:
-            print(f"채널 다시 열기 중 오류: {e}")
+            print(f"다시 열기 오류: {e}")
 
-        # 기존 검정색 닫힘 임베드 메시지 삭제
+        # 기존 닫힘 메시지 삭제
         try:
             await interaction.message.delete()
         except:
             pass
 
-        # 초록색 재오픈 임베드 출력
+        # 초록색 재오픈 임베드 생성
         green_embed = discord.Embed(
             title="🔓 티켓이 다시 열렸습니다",
             description=f"**{interaction.user.mention}** 님에 의해 티켓이 다시 열렸습니다.",
@@ -217,18 +231,16 @@ class ClosedTicketView(discord.ui.View):
     @discord.ui.button(label="⛔ 티켓 삭제", style=discord.ButtonStyle.secondary, custom_id="persistent_btn_delete_ticket")
     async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("⏳ 10초 후 티켓이 삭제됩니다.")
-        
         for i in range(9, 0, -1):
             await asyncio.sleep(1)
             try:
                 await interaction.edit_original_response(content=f"⏳ {i}초 후 티켓이 삭제됩니다.")
             except:
                 pass
-            
         await asyncio.sleep(1)
         await interaction.channel.delete()
 
-# --- 4. 모달 및 티켓 생성 ---
+# --- 4. 양식 입력 모달 ---
 class TicketModal(discord.ui.Modal):
     def __init__(self, seller: str, category_type: str, is_inquiry: bool = False):
         super().__init__(title=f"{category_type} 양식")
@@ -351,10 +363,13 @@ class TicketModal(discord.ui.Modal):
             else:
                 info_embed.add_field(name="문의 내용", value=f"```\n{self.q1.value}\n```", inline=False)
 
+            # 컨트롤 뷰 분기: 문의는 InquiryTicketControlView, 구매는 BuyTicketControlView
+            control_view = InquiryTicketControlView() if self.is_inquiry else BuyTicketControlView()
+
             await ticket_channel.send(
                 content=content_text,
                 embeds=[notice_embed, info_embed],
-                view=TicketControlView()
+                view=control_view
             )
         except Exception as e:
             print(f"Error creating ticket: {e}")
@@ -362,7 +377,7 @@ class TicketModal(discord.ui.Modal):
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"❌ 티켓 생성 중 오류가 발생했습니다: {e}", ephemeral=True)
 
-# --- 5. 알림 역할 뷰 ---
+# --- 5. 알림 역할 뷰 (버튼 클릭 시역할 자동 지급/해제) ---
 class NotificationRoleView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -392,7 +407,7 @@ class NotificationRoleView(discord.ui.View):
     async def btn_event(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.toggle_role(interaction, NOTIFICATION_ROLES["event"], "이벤트 알림")
 
-# --- 6. 드롭다운 패널 ---
+# --- 6. 구매/문의 패널 드롭다운 ---
 class TypeSelect(discord.ui.Select):
     def __init__(self, seller: str):
         self.seller = seller
@@ -483,7 +498,7 @@ async def on_message(message: discord.Message):
 
     await bot.process_commands(message)
 
-# [명령어 1] 티켓 생성 패널
+# [명령어 1] /티켓생성
 @bot.tree.command(name="티켓생성", description="구매 티켓 패널을 생성합니다. (관리자 전용)")
 async def create_ticket(interaction: discord.Interaction):
     user_role_ids = [r.id for r in interaction.user.roles]
@@ -495,7 +510,7 @@ async def create_ticket(interaction: discord.Interaction):
     await interaction.channel.send(embed=embed, view=MainTicketView())
     await interaction.response.send_message("구매 패널이 생성되었습니다.", ephemeral=True)
 
-# [명령어 2] 문의 생성 패널
+# [명령어 2] /문의생성
 @bot.tree.command(name="문의생성", description="일반 문의 티켓 패널을 생성합니다. (관리자 전용)")
 async def create_inquiry(interaction: discord.Interaction):
     user_role_ids = [r.id for r in interaction.user.roles]
@@ -511,7 +526,23 @@ async def create_inquiry(interaction: discord.Interaction):
     await interaction.channel.send(embed=embed, view=InquirySelectView())
     await interaction.response.send_message("문의 패널이 생성되었습니다.", ephemeral=True)
 
-# [명령어 3] /보내기 (특정 채널에 메시지 전송)
+# [명령어 3] /역할 (알림 역할 선택 패널 생성 명령어)
+@bot.tree.command(name="역할", description="알림 역할 지급 패널을 생성합니다. (관리자 전용)")
+async def create_role_panel(interaction: discord.Interaction):
+    user_role_ids = [r.id for r in interaction.user.roles]
+    if ADMIN_ROLE_ID not in user_role_ids and not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ 관리자만 사용할 수 있습니다.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="🔔 알림 역할 선택",
+        description="아래 버튼을 눌러 원하는 알림 역할을 받거나 해제할 수 있습니다.",
+        color=0x2b2d31
+    )
+    await interaction.channel.send(embed=embed, view=NotificationRoleView())
+    await interaction.response.send_message("알림 역할 패널이 생성되었습니다.", ephemeral=True)
+
+# [명령어 4] /보내기
 @bot.tree.command(name="보내기", description="지정한 채널에 메시지 또는 임베드를 전송합니다.")
 @app_commands.describe(channel="메시지를 보낼 채널", content="전송할 일반 내용", title="임베드 제목", description="임베드 내용")
 async def send_message(interaction: discord.Interaction, channel: discord.TextChannel, content: str = None, title: str = None, description: str = None):
@@ -533,25 +564,6 @@ async def send_message(interaction: discord.Interaction, channel: discord.TextCh
         await interaction.response.send_message(f"✅ {channel.mention} 채널에 메시지를 전송했습니다.", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ 전송 실패: {e}", ephemeral=True)
-
-# [명령어 4] /역할 (유저에게 역할 부여 및 해제)
-@bot.tree.command(name="역할", description="유저에게 역할을 부여하거나 해제합니다.")
-@app_commands.describe(user="대상 유저", role="부여/해제할 역할")
-async def toggle_user_role(interaction: discord.Interaction, user: discord.Member, role: discord.Role):
-    user_role_ids = [r.id for r in interaction.user.roles]
-    if ADMIN_ROLE_ID not in user_role_ids and not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ 사용 권한이 없습니다.", ephemeral=True)
-        return
-
-    try:
-        if role in user.roles:
-            await user.remove_roles(role)
-            await interaction.response.send_message(f"🔕 {user.mention} 님에게서 **{role.name}** 역할을 해제했습니다.", ephemeral=True)
-        else:
-            await user.add_roles(role)
-            await interaction.response.send_message(f"🔔 {user.mention} 님에게 **{role.name}** 역할을 부여했습니다.", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"❌ 역할 수정 실패: {e}", ephemeral=True)
 
 # ==================== [ 실행 ] ====================
 keep_alive()
