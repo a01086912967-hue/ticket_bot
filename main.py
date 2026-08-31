@@ -126,28 +126,33 @@ class TicketModal(discord.ui.Modal):
 
             admin_role = guild.get_role(ADMIN_ROLE_ID)
 
+            # 티켓 신청 유저 권한
             user_overwrite = discord.PermissionOverwrite(
-                read_messages=True, send_messages=True, attach_files=True,
+                view_channel=True, read_messages=True, send_messages=True, attach_files=True,
                 embed_links=True, read_message_history=True, add_reactions=False, use_external_emojis=True
             )
 
+            # 관리자 및 담당자 권한
             staff_overwrite = discord.PermissionOverwrite(
-                read_messages=True, send_messages=True, attach_files=True,
+                view_channel=True, read_messages=True, send_messages=True, attach_files=True,
                 embed_links=True, read_message_history=True, add_reactions=True, use_external_emojis=True
             )
 
+            # 기본 권한 차단 설정 (@everyone 완전 비공개)
             overwrites = {
-                guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                guild.default_role: discord.PermissionOverwrite(view_channel=False, read_messages=False),
                 interaction.user: user_overwrite,
                 guild.me: staff_overwrite
             }
             
+            # 일반 문의가 아닌 구매 티켓인 경우 해당 판매자 역할 추가
             if not self.is_inquiry:
                 role_id = ROLE_IDS.get(self.seller)
                 role = guild.get_role(role_id) if role_id else None
                 if role:
                     overwrites[role] = staff_overwrite
 
+            # 최고 관리자 역할 추가
             if admin_role:
                 overwrites[admin_role] = staff_overwrite
 
