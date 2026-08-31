@@ -87,9 +87,11 @@ def parse_topic_data(topic: str):
     return data
 
 def build_topic_data(owner_id: int, orig_cat_id: int, orig_name: str):
-    return f"OWNER:{owner_id}|ORIG_CAT:{orig_cat_id}|ORIG_NAME:{orig_name}"
+    # closed- 접두사 완전 제거 보장
+    clean_name = orig_name.replace("closed-", "")
+    return f"OWNER:{owner_id}|ORIG_CAT:{orig_cat_id}|ORIG_NAME:{clean_name}"
 
-# --- 1-A. 구매 티켓 전용 컨트롤 뷰 (닫기 + 지급완료) ---
+# --- 1-A. 구매 티켓 전용 컨트롤 뷰 ---
 class BuyTicketControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -138,7 +140,7 @@ class InquiryTicketControlView(discord.ui.View):
         )
         await interaction.response.send_message(embed=embed, view=CloseConfirmView(), ephemeral=False)
 
-# --- 2. 닫기 확인 뷰 ---
+# --- 2. 닫기 확인 뷰 (강제 마감 및 강제 반복 설정 적용) ---
 class CloseConfirmView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -155,44 +157,52 @@ class CloseConfirmView(discord.ui.View):
             pass
 
         topic_data = parse_topic_data(channel.topic)
-        owner_id = topic_data.get("OWNER")
-        orig_cat_id = topic_data.get("ORIG_CAT")
+        owner_id = topic_data.get("OWNER", "0")
+        
+        # 이전 원래 이름 가져오기 및 closed- 강제 정제
         orig_name = topic_data.get("ORIG_NAME")
-
         if not orig_name:
             orig_name = channel.name.replace("closed-", "")
+        else:
+            orig_name = orig_name.replace("closed-", "")
 
-        # 기존 topic 정보를 보존하면서 closed로 이동
-        if not orig_cat_id and channel.category_id != CLOSED_CATEGORY_ID:
-            orig_cat_id = str(channel.category_id)
+        # 기존 카테고리 ID 유지 (현재 closed 카테고리가 아닐 때만 업데이트)
+        orig_cat_id = topic_data.get("ORIG_CAT")
+        if not orig_cat_id or orig_cat_id == "0":
+            if channel.category_id and channel.category_id != CLOSED_CATEGORY_ID:
+                orig_cat_id = str(channel.category_id)
+            else:
+                orig_cat_id = "0"
 
-        new_topic = build_topic_data(owner_id or 0, orig_cat_id or 0, orig_name)
-
+        # 반복 수용을 위한 topic 강제 재구성
+        new_topic = build_topic_data(owner_id, orig_cat_id, orig_name)
         closed_category = guild.get_channel(CLOSED_CATEGORY_ID)
         new_name = f"closed-{orig_name}"
 
+        # 채널 수정 강제 진행
         try:
+            edit_kwargs = {"name": new_name, "topic": new_topic}
             if closed_category:
-                await channel.edit(name=new_name, category=closed_category, topic=new_topic)
-            else:
-                await channel.edit(name=new_name, topic=new_topic)
+                edit_kwargs["category"] = closed_category
+            await channel.edit(**edit_kwargs)
         except Exception as e:
-            print(f"닫기 실행 실패: {e}")
+            print(f"채널 닫기 강제 처리 중 예외 발생 (무시하고 계속 진행): {e}")
 
-        # 1번째 빨간색 임베드
+        # 1번째 빨간색 마감 임베드
         red_embed = discord.Embed(
             title="🔒 티켓이 마감되었습니다.",
             description="이 티켓은 현재 마감 처리된 상태입니다.\n아래 관리 메뉴를 통해 다시 열거나 삭제할 수 있습니다.",
             color=0xed4245
         )
 
-        # 2번째 검정색 관리 임베드
+        # 2번째 검정색 정보 임베드
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         black_embed = discord.Embed(
             title="⚙️ 관리자 티켓 관리",
             color=0x2b2d31
         )
-        black_embed.add_field(name="티켓 생성자", value=f"<@{owner_id}>" if owner_id else "알 수 없음", inline=True)
+        owner_mention = f"<@{owner_id}>" if owner_id != "0" else "알 수 없음"
+        black_embed.add_field(name="티켓 생성자", value=owner_mention, inline=True)
         black_embed.add_field(name="티켓 마감자", value=interaction.user.mention, inline=True)
         black_embed.add_field(name="마감 일시", value=f"`{now_str}`", inline=False)
 
@@ -206,7 +216,7 @@ class CloseConfirmView(discord.ui.View):
             pass
         await interaction.response.send_message("티켓 닫기를 취소했습니다.", ephemeral=True)
 
-# --- 3. 마감된 티켓 뷰 (다시 열기 / 삭제) ---
+# --- 3. 마감된 티켓 뷰 (다시 열기 / 삭제 - 강제 복구 적용) ---
 class ClosedTicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -218,34 +228,35 @@ class ClosedTicketView(discord.ui.View):
         guild = interaction.guild
 
         topic_data = parse_topic_data(channel.topic)
-        owner_id = topic_data.get("OWNER")
-        orig_cat_id = topic_data.get("ORIG_CAT")
+        owner_id = topic_data.get("OWNER", "0")
+        orig_cat_id = topic_data.get("ORIG_CAT", "0")
         orig_name = topic_data.get("ORIG_NAME")
 
         if not orig_name:
             orig_name = channel.name.replace("closed-", "")
+        else:
+            orig_name = orig_name.replace("closed-", "")
 
         orig_category = None
         if orig_cat_id and orig_cat_id.isdigit() and int(orig_cat_id) != 0:
             orig_category = guild.get_channel(int(orig_cat_id))
 
-        new_topic = build_topic_data(owner_id or 0, orig_cat_id or 0, orig_name)
+        new_topic = build_topic_data(owner_id, orig_cat_id, orig_name)
 
+        # 복구 강제 실행
         try:
+            edit_kwargs = {"name": orig_name, "topic": new_topic}
             if orig_category:
-                await channel.edit(name=orig_name, category=orig_category, topic=new_topic)
-            else:
-                await channel.edit(name=orig_name, topic=new_topic)
+                edit_kwargs["category"] = orig_category
+            await channel.edit(**edit_kwargs)
         except Exception as e:
-            print(f"다시 열기 실행 실패: {e}")
+            print(f"채널 다시 열기 처리 중 예외 발생: {e}")
 
-        # 기존 마감 안내 메세지 삭제 시도
         try:
             await interaction.message.delete()
         except:
             pass
 
-        # 초록색 재오픈 안내 임베드
         green_embed = discord.Embed(
             title="🔓 티켓이 다시 열렸습니다",
             description=f"**{interaction.user.mention}** 님에 의해 기존 위치로 티켓이 복구되었습니다.",
@@ -401,7 +412,7 @@ class TicketModal(discord.ui.Modal):
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"❌ 티켓 생성 중 오류가 발생했습니다: {e}", ephemeral=True)
 
-# --- 5. 알림 역할 뷰 (내용 강화 반영) ---
+# --- 5. 알림 역할 뷰 ---
 class NotificationRoleView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -550,7 +561,7 @@ async def create_inquiry(interaction: discord.Interaction):
     await interaction.channel.send(embed=embed, view=InquirySelectView())
     await interaction.response.send_message("문의 패널이 생성되었습니다.", ephemeral=True)
 
-# [명령어 3] /역할 (패널 설명 문구 복원 및 확장)
+# [명령어 3] /역할
 @bot.tree.command(name="역할", description="알림 역할 지급 패널을 생성합니다. (관리자 전용)")
 async def create_role_panel(interaction: discord.Interaction):
     user_role_ids = [r.id for r in interaction.user.roles]
