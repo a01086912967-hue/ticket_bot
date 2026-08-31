@@ -151,7 +151,6 @@ class TicketModal(discord.ui.Modal):
             if admin_role:
                 overwrites[admin_role] = staff_overwrite
 
-            # 채널 이름을 사용자 이름(닉네임)으로 설정
             channel_name = f"티켓-{interaction.user.display_name}"
             
             ticket_channel = await guild.create_text_channel(
@@ -340,8 +339,13 @@ class ClosedTicketView(discord.ui.View):
 
     @discord.ui.button(label="티켓 삭제", style=discord.ButtonStyle.secondary, custom_id="btn_delete_ticket")
     async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("5초 후 티켓이 삭제됩니다.")
-        await asyncio.sleep(5)
+        await interaction.response.send_message("⏳ 10초 후 티켓이 삭제됩니다.")
+        
+        for i in range(9, 0, -1):
+            await asyncio.sleep(1)
+            await interaction.edit_original_response(content=f"⏳ {i}초 후 티켓이 삭제됩니다.")
+            
+        await asyncio.sleep(1)
         await interaction.channel.delete()
 
 # --- 3. 알림 역할 뷰 ---
