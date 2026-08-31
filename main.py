@@ -567,16 +567,16 @@ async def create_role_panel(interaction: discord.Interaction):
 
     embed_description = (
         "아래 희망하는 알림을 받아보세요!\n\n\n"
-        "<:bux_purple:1461792088718053569>  ┆  **로벅스 입고 알림**\n"
+        "<:bux_purple:1461792088718053569>  ┆  **로벅스 재고 입고 알림**\n"
         "↪ 로벅스 재고 입고 시 알림이 제공됩니다.**\n\n\n"
-        "<a:Money:1373524938723557507>  ┆  **인게임 상품 입고 알림**\n"
+        "<a:Money:1373524938723557507>  ┆  **인게임 재고 입고 알림**\n"
         "↪ 인게임 상품 재고 입고 시 알림이 제공됩니다.**\n\n\n"
-        "<a:Gift_box:1373525157163040770>  ┆  **기타 상품 입고 알림**\n"
-        "↪ 기타 상품 재고 입고 시 알림이 제공됩니다.**"
+        "<a:Gift_box:1373525157163040770>  ┆  **이벤트 시작 알림**\n"
+        "↪ 이벤트 시작 시 알림이 제공됩니다.**"
     )
 
     embed = discord.Embed(
-        title="입고 알림 받기 🔔",
+        title="서버 알림 받기 🔔",
         description=embed_description,
         color=0x2b2d31
     )
