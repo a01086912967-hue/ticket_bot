@@ -39,6 +39,11 @@ NOTIFICATION_ROLES = {
     "event": 1461769960014741587  # 기타 상품 알림용 역할 ID
 }
 
+# 설정한 기존 커스텀 이모지
+EMOJI_BUX = "<:bux_purple:1461792088718053569>"
+EMOJI_MONEY = "<a:Money:1373524938723557507>"
+EMOJI_GIFT = "<a:Gift_box:1373525157163040770>"
+
 ADMIN_ROLE_ID = 1396885435850162317
 
 CATEGORY_IDS = {
@@ -400,33 +405,36 @@ class TicketModal(discord.ui.Modal):
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"❌ 티켓 생성 중 오류가 발생했습니다: {e}", ephemeral=True)
 
-# --- 5. 알림 역할 뷰 (이미지 양식 전면 반영) ---
+# --- 5. 알림 역할 뷰 (응답 처리 최적화 & 커스텀 이모지 원복) ---
 class NotificationRoleView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     async def toggle_role(self, interaction: discord.Interaction, role_id: int, role_name: str):
+        # 3초 초과 방지를 위한 선제 응답 지연 처리
+        await interaction.response.defer(ephemeral=True)
+        
         role = interaction.guild.get_role(role_id)
         if not role:
-            await interaction.response.send_message("❌ 역할을 찾을 수 없습니다.", ephemeral=True)
+            await interaction.followup.send("❌ 역할을 찾을 수 없습니다.", ephemeral=True)
             return
 
         if role in interaction.user.roles:
             await interaction.user.remove_roles(role)
-            await interaction.response.send_message(f"🔕 **{role_name}** 역할을 해제했습니다.", ephemeral=True)
+            await interaction.followup.send(f"🔕 **{role_name}** 역할을 해제했습니다.", ephemeral=True)
         else:
             await interaction.user.add_roles(role)
-            await interaction.response.send_message(f"🔔 **{role_name}** 역할을 지급받았습니다.", ephemeral=True)
+            await interaction.followup.send(f"🔔 **{role_name}** 역할을 지급받았습니다.", ephemeral=True)
 
-    @discord.ui.button(label="로벅스 알림", emoji="⬟", style=discord.ButtonStyle.blurple, custom_id="persistent_btn_role_roblox")
+    @discord.ui.button(label="로벅스 알림", emoji=discord.PartialEmoji.from_str(EMOJI_BUX), style=discord.ButtonStyle.blurple, custom_id="persistent_btn_role_roblox")
     async def btn_roblox(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.toggle_role(interaction, NOTIFICATION_ROLES["roblox"], "로벅스 알림")
 
-    @discord.ui.button(label="인게임 알림", emoji="🎮", style=discord.ButtonStyle.blurple, custom_id="persistent_btn_role_ingame")
+    @discord.ui.button(label="인게임 알림", emoji=discord.PartialEmoji.from_str(EMOJI_MONEY), style=discord.ButtonStyle.blurple, custom_id="persistent_btn_role_ingame")
     async def btn_ingame(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.toggle_role(interaction, NOTIFICATION_ROLES["ingame"], "인게임 알림")
 
-    @discord.ui.button(label="기타상품 알림", emoji="📦", style=discord.ButtonStyle.blurple, custom_id="persistent_btn_role_event")
+    @discord.ui.button(label="기타상품 알림", emoji=discord.PartialEmoji.from_str(EMOJI_GIFT), style=discord.ButtonStyle.blurple, custom_id="persistent_btn_role_event")
     async def btn_event(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.toggle_role(interaction, NOTIFICATION_ROLES["event"], "기타상품 알림")
 
@@ -549,7 +557,7 @@ async def create_inquiry(interaction: discord.Interaction):
     await interaction.channel.send(embed=embed, view=InquirySelectView())
     await interaction.response.send_message("문의 패널이 생성되었습니다.", ephemeral=True)
 
-# [명령어 3] /역할 (사진 양식 반영)
+# [명령어 3] /역할
 @bot.tree.command(name="역할", description="알림 역할 지급 패널을 생성합니다. (관리자 전용)")
 async def create_role_panel(interaction: discord.Interaction):
     user_role_ids = [r.id for r in interaction.user.roles]
@@ -559,11 +567,11 @@ async def create_role_panel(interaction: discord.Interaction):
 
     embed_description = (
         "아래 희망하는 알림을 받아보세요!\n\n\n"
-        "⬟  ┆  **로벅스 입고 알림**\n"
+        "<:bux_purple:1461792088718053569>  ┆  **로벅스 입고 알림**\n"
         "↪ 로벅스 재고 입고 시 알림이 제공됩니다.**\n\n\n"
-        "🎮  ┆  **인게임 상품 입고 알림**\n"
+        "<a:Money:1373524938723557507>  ┆  **인게임 상품 입고 알림**\n"
         "↪ 인게임 상품 재고 입고 시 알림이 제공됩니다.**\n\n\n"
-        "📦  ┆  **기타 상품 입고 알림**\n"
+        "<a:Gift_box:1373525157163040770>  ┆  **기타 상품 입고 알림**\n"
         "↪ 기타 상품 재고 입고 시 알림이 제공됩니다.**"
     )
 
