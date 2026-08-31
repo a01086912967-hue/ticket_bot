@@ -64,7 +64,6 @@ class TicketBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
-        # 지속형 View 등록 (봇 재부팅 후에도 버튼 작동 유지)
         self.add_view(MainTicketView())
         self.add_view(InquirySelectView())
         self.add_view(NotificationRoleView())
@@ -74,7 +73,7 @@ class TicketBot(commands.Bot):
 
 bot = TicketBot()
 
-# --- 1. 티켓 컨트롤 뷰 (열려있는 상태) ---
+# --- 1. 오픈 상태 컨트롤 뷰 ---
 class TicketControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -96,11 +95,15 @@ class TicketControlView(discord.ui.View):
             await interaction.response.send_message("❌ 지급완료 처리 권한이 없습니다.", ephemeral=True)
             return
 
+        # 1회만 클릭 가능하도록 버튼 비활성화
+        button.disabled = True
+        await interaction.response.edit_message(view=self)
+
         complete_embed = discord.Embed(
             description="**아이템이 정상적으로 지급되었어요. <a:Gzest001:1452891675625259122>\n<#1395743402456383631> 작성은 필수입니다.**",
             color=0x2b2d31
         )
-        await interaction.response.send_message(embed=complete_embed)
+        await interaction.followup.send(embed=complete_embed)
 
 # --- 2. 닫기 확인 뷰 ---
 class CloseConfirmView(discord.ui.View):
@@ -113,10 +116,15 @@ class CloseConfirmView(discord.ui.View):
         channel = interaction.channel
         guild = interaction.guild
 
-        # 닫힌 카테고리 가져오기
+        # 원래 카테고리 ID를 채널 토픽(topic)에 기재해둠 (복구용)
+        if channel.category and channel.category_id != CLOSED_CATEGORY_ID:
+            try:
+                await channel.edit(topic=f"ORIGINAL_CAT:{channel.category_id}")
+            except:
+                pass
+
         closed_category = guild.get_channel(CLOSED_CATEGORY_ID)
         
-        # 채널 이름 설정 (closed- 접두사 붙이기)
         current_name = channel.name
         if not current_name.startswith("closed-"):
             new_name = f"closed-{current_name}"
@@ -124,19 +132,18 @@ class CloseConfirmView(discord.ui.View):
             new_name = current_name
 
         try:
-            # 질문 메시지 삭제
             await interaction.message.delete()
         except:
             pass
 
-        # 채널 수정 (카테고리 이동 & 이름 변경)
+        # 마감 카테고리로 이동 & 이름 변경
         try:
             if closed_category:
                 await channel.edit(name=new_name, category=closed_category)
             else:
                 await channel.edit(name=new_name)
         except Exception as e:
-            print(f"채널 닫기 수정 중 오류: {e}")
+            print(f"채널 닫기 이동 중 오류: {e}")
 
         close_embed = discord.Embed(
             title="🔒 티켓이 닫혔습니다",
@@ -154,7 +161,7 @@ class CloseConfirmView(discord.ui.View):
             pass
         await interaction.response.send_message("티켓 닫기를 취소했습니다.", ephemeral=True)
 
-# --- 3. 닫힌 티켓 컨트롤 뷰 (다시 열기 / 삭제) ---
+# --- 3. 마감된 티켓 뷰 (다시 열기 / 삭제) ---
 class ClosedTicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -165,15 +172,18 @@ class ClosedTicketView(discord.ui.View):
         channel = interaction.channel
         guild = interaction.guild
 
-        # closed- 접두사 제거
         target_name = channel.name.replace("closed-", "")
 
-        # 원래 카테고리 찾아보기 (기본 카테고리 지정)
+        # 채널 토픽에 저장해둔 원래 카테고리 ID 읽어오기
         orig_category = None
-        # 문의 카테고리 또는 일반 카테고리로 복구 시도
-        if INQUIRY_CATEGORY_ID:
-            orig_category = guild.get_channel(INQUIRY_CATEGORY_ID)
+        if channel.topic and "ORIGINAL_CAT:" in channel.topic:
+            try:
+                cat_id = int(channel.topic.split("ORIGINAL_CAT:")[1].split()[0])
+                orig_category = guild.get_channel(cat_id)
+            except:
+                orig_category = None
 
+        # 원래 카테고리로 이동 및 closed- 접두사 제거
         try:
             if orig_category:
                 await channel.edit(name=target_name, category=orig_category)
@@ -182,19 +192,11 @@ class ClosedTicketView(discord.ui.View):
         except Exception as e:
             print(f"채널 다시 열기 오류: {e}")
 
+        # 열기 클릭 시 닫기/삭제 메시지만 깔끔하게 삭제하고 아래 추가 버튼은 생성 안 함
         try:
             await interaction.message.delete()
         except:
             pass
-
-        reopen_embed = discord.Embed(
-            title="🔓 티켓이 다시 열렸습니다",
-            description=f"**{interaction.user.mention}** 님에 의해 티켓이 다시 열렸습니다.",
-            color=0x2ecc71
-        )
-        
-        # 다시 열릴 때 닫기 버튼 전송
-        await channel.send(embed=reopen_embed, view=TicketControlView())
 
     @discord.ui.button(label="⛔ 티켓 삭제", style=discord.ButtonStyle.secondary, custom_id="persistent_btn_delete_ticket")
     async def delete_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -294,6 +296,7 @@ class TicketModal(discord.ui.Modal):
             ticket_channel = await guild.create_text_channel(
                 name=channel_name,
                 category=category,
+                topic=f"ORIGINAL_CAT:{category.id}" if category else "",
                 overwrites=overwrites
             )
 
