@@ -36,12 +36,8 @@ ROLE_IDS = {
 NOTIFICATION_ROLES = {
     "roblox": 1393460612046000218,
     "ingame": 1393460552327499867,
-    "event": 1461769960014741587
+    "event": 1461769960014741587  # 기타 상품 알림용 역할 ID
 }
-
-EMOJI_BUX = "<:bux_purple:1461792088718053569>"
-EMOJI_MONEY = "<a:Money:1373524938723557507>"
-EMOJI_GIFT = "<a:Gift_box:1373525157163040770>"
 
 ADMIN_ROLE_ID = 1396885435850162317
 
@@ -87,7 +83,6 @@ def parse_topic_data(topic: str):
     return data
 
 def build_topic_data(owner_id: int, orig_cat_id: int, orig_name: str):
-    # closed- 접두사 완전 제거 보장
     clean_name = orig_name.replace("closed-", "")
     return f"OWNER:{owner_id}|ORIG_CAT:{orig_cat_id}|ORIG_NAME:{clean_name}"
 
@@ -140,7 +135,7 @@ class InquiryTicketControlView(discord.ui.View):
         )
         await interaction.response.send_message(embed=embed, view=CloseConfirmView(), ephemeral=False)
 
-# --- 2. 닫기 확인 뷰 (강제 마감 및 강제 반복 설정 적용) ---
+# --- 2. 닫기 확인 뷰 ---
 class CloseConfirmView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -159,14 +154,12 @@ class CloseConfirmView(discord.ui.View):
         topic_data = parse_topic_data(channel.topic)
         owner_id = topic_data.get("OWNER", "0")
         
-        # 이전 원래 이름 가져오기 및 closed- 강제 정제
         orig_name = topic_data.get("ORIG_NAME")
         if not orig_name:
             orig_name = channel.name.replace("closed-", "")
         else:
             orig_name = orig_name.replace("closed-", "")
 
-        # 기존 카테고리 ID 유지 (현재 closed 카테고리가 아닐 때만 업데이트)
         orig_cat_id = topic_data.get("ORIG_CAT")
         if not orig_cat_id or orig_cat_id == "0":
             if channel.category_id and channel.category_id != CLOSED_CATEGORY_ID:
@@ -174,28 +167,24 @@ class CloseConfirmView(discord.ui.View):
             else:
                 orig_cat_id = "0"
 
-        # 반복 수용을 위한 topic 강제 재구성
         new_topic = build_topic_data(owner_id, orig_cat_id, orig_name)
         closed_category = guild.get_channel(CLOSED_CATEGORY_ID)
         new_name = f"closed-{orig_name}"
 
-        # 채널 수정 강제 진행
         try:
             edit_kwargs = {"name": new_name, "topic": new_topic}
             if closed_category:
                 edit_kwargs["category"] = closed_category
             await channel.edit(**edit_kwargs)
         except Exception as e:
-            print(f"채널 닫기 강제 처리 중 예외 발생 (무시하고 계속 진행): {e}")
+            print(f"채널 닫기 처리 중 오류: {e}")
 
-        # 1번째 빨간색 마감 임베드
         red_embed = discord.Embed(
             title="🔒 티켓이 마감되었습니다.",
             description="이 티켓은 현재 마감 처리된 상태입니다.\n아래 관리 메뉴를 통해 다시 열거나 삭제할 수 있습니다.",
             color=0xed4245
         )
 
-        # 2번째 검정색 정보 임베드
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         black_embed = discord.Embed(
             title="⚙️ 관리자 티켓 관리",
@@ -216,7 +205,7 @@ class CloseConfirmView(discord.ui.View):
             pass
         await interaction.response.send_message("티켓 닫기를 취소했습니다.", ephemeral=True)
 
-# --- 3. 마감된 티켓 뷰 (다시 열기 / 삭제 - 강제 복구 적용) ---
+# --- 3. 마감된 티켓 뷰 ---
 class ClosedTicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -243,14 +232,13 @@ class ClosedTicketView(discord.ui.View):
 
         new_topic = build_topic_data(owner_id, orig_cat_id, orig_name)
 
-        # 복구 강제 실행
         try:
             edit_kwargs = {"name": orig_name, "topic": new_topic}
             if orig_category:
                 edit_kwargs["category"] = orig_category
             await channel.edit(**edit_kwargs)
         except Exception as e:
-            print(f"채널 다시 열기 처리 중 예외 발생: {e}")
+            print(f"채널 다시 열기 처리 중 오류: {e}")
 
         try:
             await interaction.message.delete()
@@ -412,7 +400,7 @@ class TicketModal(discord.ui.Modal):
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"❌ 티켓 생성 중 오류가 발생했습니다: {e}", ephemeral=True)
 
-# --- 5. 알림 역할 뷰 ---
+# --- 5. 알림 역할 뷰 (이미지 양식 전면 반영) ---
 class NotificationRoleView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -430,17 +418,17 @@ class NotificationRoleView(discord.ui.View):
             await interaction.user.add_roles(role)
             await interaction.response.send_message(f"🔔 **{role_name}** 역할을 지급받았습니다.", ephemeral=True)
 
-    @discord.ui.button(label="로벅스 알림", emoji=discord.PartialEmoji.from_str(EMOJI_BUX), style=discord.ButtonStyle.blurple, custom_id="persistent_btn_role_roblox")
+    @discord.ui.button(label="로벅스 알림", emoji="⬟", style=discord.ButtonStyle.blurple, custom_id="persistent_btn_role_roblox")
     async def btn_roblox(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.toggle_role(interaction, NOTIFICATION_ROLES["roblox"], "로벅스 알림")
 
-    @discord.ui.button(label="인게임 알림", emoji=discord.PartialEmoji.from_str(EMOJI_MONEY), style=discord.ButtonStyle.blurple, custom_id="persistent_btn_role_ingame")
+    @discord.ui.button(label="인게임 알림", emoji="🎮", style=discord.ButtonStyle.blurple, custom_id="persistent_btn_role_ingame")
     async def btn_ingame(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.toggle_role(interaction, NOTIFICATION_ROLES["ingame"], "인게임 알림")
 
-    @discord.ui.button(label="이벤트 알림", emoji=discord.PartialEmoji.from_str(EMOJI_GIFT), style=discord.ButtonStyle.blurple, custom_id="persistent_btn_role_event")
+    @discord.ui.button(label="기타상품 알림", emoji="📦", style=discord.ButtonStyle.blurple, custom_id="persistent_btn_role_event")
     async def btn_event(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.toggle_role(interaction, NOTIFICATION_ROLES["event"], "이벤트 알림")
+        await self.toggle_role(interaction, NOTIFICATION_ROLES["event"], "기타상품 알림")
 
 # --- 6. 드롭다운 및 패널 뷰 ---
 class TypeSelect(discord.ui.Select):
@@ -561,7 +549,7 @@ async def create_inquiry(interaction: discord.Interaction):
     await interaction.channel.send(embed=embed, view=InquirySelectView())
     await interaction.response.send_message("문의 패널이 생성되었습니다.", ephemeral=True)
 
-# [명령어 3] /역할
+# [명령어 3] /역할 (사진 양식 반영)
 @bot.tree.command(name="역할", description="알림 역할 지급 패널을 생성합니다. (관리자 전용)")
 async def create_role_panel(interaction: discord.Interaction):
     user_role_ids = [r.id for r in interaction.user.roles]
@@ -569,21 +557,25 @@ async def create_role_panel(interaction: discord.Interaction):
         await interaction.response.send_message("❌ 관리자만 사용할 수 있습니다.", ephemeral=True)
         return
 
+    embed_description = (
+        "아래 희망하는 알림을 받아보세요!\n\n\n"
+        "⬟  ┆  **로벅스 입고 알림**\n"
+        "↪ 로벅스 재고 입고 시 알림이 제공됩니다.**\n\n\n"
+        "🎮  ┆  **인게임 상품 입고 알림**\n"
+        "↪ 인게임 상품 재고 입고 시 알림이 제공됩니다.**\n\n\n"
+        "📦  ┆  **기타 상품 입고 알림**\n"
+        "↪ 기타 상품 재고 입고 시 알림이 제공됩니다.**"
+    )
+
     embed = discord.Embed(
-        title="🔔 서버 맞춤 알림 역할 선택",
-        description=(
-            "아래 버튼을 눌러 원하시는 알림 역할을 자유롭게 받아가세요!\n\n"
-            f"{EMOJI_BUX} **로벅스 알림**: 로벅스 재고 충전 및 판매 관련 알림이 제공됩니다.\n"
-            f"{EMOJI_MONEY} **인게임 알림**: 각종 인게임 아이템 및 거래 관련 알림이 제공됩니다.\n"
-            f"{EMOJI_GIFT} **이벤트 알림**: 서버 내 이벤트 및 특가 진행 알림이 제공됩니다.\n\n"
-            "※ 이미 소지한 역할 버튼을 다시 누르면 역할이 해제됩니다."
-        ),
+        title="입고 알림 받기 🔔",
+        description=embed_description,
         color=0x2b2d31
     )
     await interaction.channel.send(embed=embed, view=NotificationRoleView())
     await interaction.response.send_message("알림 역할 패널이 생성되었습니다.", ephemeral=True)
 
-# [명령어 4] /보내기 (content 필수, channel 선택)
+# [명령어 4] /보내기
 @bot.tree.command(name="보내기", description="메시지 또는 임베드를 전송합니다.")
 @app_commands.describe(content="전송할 내용 (필수)", channel="전송할 채널 (미입력 시 현재 채널)", title="임베드 제목 (선택)")
 async def send_message(
