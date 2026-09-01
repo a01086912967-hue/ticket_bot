@@ -30,7 +30,7 @@ ROLE_IDS = {
     "소뚜": 1543547595350220810,
     "3월": 1543547471756787722,
     "쥬스": 1543547625977151628,
-    "유키": 1543547960422572053
+    "프노": 1543547960422572053
 }
 
 NOTIFICATION_ROLES = {
@@ -50,7 +50,7 @@ CATEGORY_IDS = {
     "소뚜": {"로벅스": 1543555550485282877, "인게임": 1543555594420494428},
     "3월": {"로벅스": 1543574405836316742, "기타": 1543575899516047480},
     "쥬스": {"인게임": 1543572620597796874, "로벅스": 1543555641304551525},
-    "유키": {"로벅스": 1373102489372590181}
+    "프노": {"로벅스": 1373102489372590181}
 }
 
 INQUIRY_CATEGORY_ID = 1463905394618536008
@@ -468,7 +468,7 @@ class SellerSelect(discord.ui.Select):
             discord.SelectOption(label="소뚜", value="소뚜"),
             discord.SelectOption(label="3월", value="3월"),
             discord.SelectOption(label="쥬스", value="쥬스"),
-            discord.SelectOption(label="유키", value="유키")
+            discord.SelectOption(label="프노", value="프노")
         ]
         super().__init__(placeholder="판매자를 선택해 주세요.", options=options, custom_id="persistent_select_seller_main")
 
