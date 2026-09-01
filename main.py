@@ -448,7 +448,7 @@ class TypeSelect(discord.ui.Select):
             options = [discord.SelectOption(label="로벅스 구매하기", value="로벅스"), discord.SelectOption(label="기타 구매하기", value="기타")]
         elif seller == "쥬스":
             options = [discord.SelectOption(label="인게임 구매하기", value="인게임"), discord.SelectOption(label="로벅스 구매하기", value="로벅스")]
-        elif seller == "유키":
+        elif seller == "프노":
             options = [discord.SelectOption(label="로벅스 구매하기", value="로벅스")]
 
         super().__init__(placeholder="구매 유형을 선택해 주세요.", options=options)
