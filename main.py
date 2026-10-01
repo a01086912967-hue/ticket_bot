@@ -65,25 +65,6 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 
-# ==================== [ SeparatorBuilder 헬퍼 ] ====================
-class SeparatorBuilder:
-
-  @staticmethod
-  def line(style: str = 'thin') -> str:
-    if style == 'bold':
-      return '▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬'
-    elif style == 'dashed':
-      return '------------------------------------'
-    elif style == 'dot':
-      return '‧̍̊·̊․ˑ📜 📜 📜 ˑ․·̊̍̊'
-    return '────────────────────────────────────'
-
-  @staticmethod
-  def block_header(title: str, style: str = 'bold') -> str:
-    sep = SeparatorBuilder.line(style)
-    return f'{sep}\n**{title}**\n{sep}'
-
-
 # --- 토픽 데이터 파싱/생성 헬퍼 ---
 def parse_topic_data(topic: str):
   data = {}
@@ -117,16 +98,13 @@ def is_admin_or_staff(user: discord.Member) -> bool:
 # --- 공통 함수: 주의사항 메시지 전송 ---
 async def send_notice_response(interaction: discord.Interaction):
   notice_text = (
-      f'{SeparatorBuilder.line("bold")}\n'
       '<a:ICON3:1373525554539790377> **주의 사항**'
-      ' <a:ICON3:1373525554539790377>\n'
-      f'{SeparatorBuilder.line("thin")}\n\n'
+      ' <a:ICON3:1373525554539790377>\n\n'
       '1. <#1395756963169828944>\n'
       '2. <#1372688635572519042>\n'
       '3. <#1375702918778327141>\n\n'
       "위 채널 전부 필독하기 <a:Pink_exclamation_point:1373524874584391741>\n채널과 '알"
-      " 수 없음' 클릭해서 내용을 확인하세요.\n"
-      f'{SeparatorBuilder.line("bold")}'
+      " 수 없음' 클릭해서 내용을 확인하세요."
   )
   await interaction.response.send_message(notice_text, ephemeral=True)
 
@@ -157,12 +135,7 @@ class BuyTicketControlView(discord.ui.View):
 
     embed = discord.Embed(
         title='🔒 티켓을 닫으시겠습니까?',
-        description=(
-            f'{SeparatorBuilder.line("thin")}\n'
-            '아래 **닫기** 버튼을 누르면 티켓이 마감 카테고리로 이동하며 생성자의'
-            ' 접근 권한이 차단됩니다.\n'
-            f'{SeparatorBuilder.line("thin")}'
-        ),
+        description='아래 **닫기** 버튼을 누르면 티켓이 마감 카테고리로 이동하며 생성자의 접근 권한이 차단됩니다.',
         color=0x2B2D31,
     )
     await interaction.response.send_message(
@@ -193,11 +166,9 @@ class BuyTicketControlView(discord.ui.View):
 
     complete_embed = discord.Embed(
         description=(
-            f'{SeparatorBuilder.line("thin")}\n'
             '**아이템이 정상적으로 지급되었어요.'
-            ' <a:Gzest001:1452891675625259122>**\n'
-            '<#1395743402456383631> 작성은 필수입니다.\n'
-            f'{SeparatorBuilder.line("thin")}'
+            ' <a:Gzest001:1452891675625259122>**\n<#1395743402456383631> 작성은'
+            ' 필수입니다.'
         ),
         color=0x2B2D31,
     )
@@ -226,11 +197,7 @@ class InquiryTicketControlView(discord.ui.View):
 
     embed = discord.Embed(
         title='🔒 티켓을 닫으시겠습니까?',
-        description=(
-            f'{SeparatorBuilder.line("thin")}\n'
-            '아래 **닫기** 버튼을 누르면 티켓이 마감 카테고리로 이동합니다.\n'
-            f'{SeparatorBuilder.line("thin")}'
-        ),
+        description='아래 **닫기** 버튼을 누르면 티켓이 마감 카테고리로 이동합니다.',
         color=0x2B2D31,
     )
     await interaction.response.send_message(
@@ -310,10 +277,8 @@ class CloseConfirmView(discord.ui.View):
     red_embed = discord.Embed(
         title='🔒 티켓이 마감되었습니다.',
         description=(
-            f'{SeparatorBuilder.line("thin")}\n'
-            '이 티켓은 현재 마감 처리된 상태입니다.\n'
-            '아래 관리 메뉴를 통해 다시 열거나 삭제할 수 있습니다.\n'
-            f'{SeparatorBuilder.line("thin")}'
+            '이 티켓은 현재 마감 처리된 상태입니다.\n아래 관리 메뉴를 통해 다시'
+            ' 열거나 삭제할 수 있습니다.'
         ),
         color=0xED4245,
     )
@@ -428,10 +393,8 @@ class ClosedTicketView(discord.ui.View):
     green_embed = discord.Embed(
         title='🔓 티켓이 다시 열렸습니다',
         description=(
-            f'{SeparatorBuilder.line("thin")}\n'
             f'**{interaction.user.mention}** 님에 의해 기존 위치로 티켓이'
-            ' 복구되었습니다.\n'
-            f'{SeparatorBuilder.line("thin")}'
+            ' 복구되었습니다.'
         ),
         color=0x2ECC71,
     )
@@ -616,10 +579,8 @@ class TicketModal(discord.ui.Modal):
 
       notice_embed = discord.Embed(
           description=(
-              f'{SeparatorBuilder.line("thin")}\n'
-              '관리자를 멘션 하였습니다.\n'
-              '추가로 멘션 할 경우 처벌될 수 있습니다.\n'
-              f'{SeparatorBuilder.line("thin")}'
+              '관리자를 멘션 하였습니다.\n추가로 멘션 할 경우 처벌될 수'
+              ' 있습니다.'
           ),
           color=0x2ECC71,
       )
@@ -840,7 +801,7 @@ class MainTicketView(discord.ui.View):
     self.add_item(SellerSelect())
 
   @discord.ui.button(
-      label='⚠️ 주의사항',
+      label='⚠️️ 주의사항',
       style=discord.ButtonStyle.danger,
       custom_id='persistent_btn_notice_main',
       row=1,
@@ -892,6 +853,31 @@ class InquirySelectView(discord.ui.View):
       self, interaction: discord.Interaction, button: discord.ui.Button
   ):
     await send_notice_response(interaction)
+
+
+# ==================== [ Components V2 Layout Helpers ] ====================
+
+
+def build_v2_panel_layout(
+    title: str, description: str, components_view: discord.ui.View
+) -> discord.ui.LayoutView:
+  """Components V2 (Container, TextDisplay, Separator) 기반 패널 생성기"""
+  layout = discord.ui.LayoutView()
+  container = discord.ui.Container()
+
+  # Title Header & Divider
+  container.add_item(discord.ui.TextDisplay(f'## {title}'))
+  container.add_item(discord.ui.Separator())
+
+  # Body Description
+  container.add_item(discord.ui.TextDisplay(description))
+
+  # Action Controls
+  for child in components_view.children:
+    container.add_item(child)
+
+  layout.add_item(container)
+  return layout
 
 
 # ==================== [ Bot Init & Commands ] ====================
@@ -957,16 +943,14 @@ async def create_ticket(interaction: discord.Interaction):
     )
     return
 
-  embed = discord.Embed(
+  # V2 LayoutView 생성
+  v2_view = build_v2_panel_layout(
       title='🛒 구매 티켓 문의',
-      description=(
-          f'{SeparatorBuilder.line("bold")}\n'
-          '아래 메뉴에서 원하는 판매자를 선택해 주세요.\n'
-          f'{SeparatorBuilder.line("thin")}'
-      ),
-      color=0x2B2D31,
+      description='아래 메뉴에서 원하는 판매자를 선택해 주세요.',
+      components_view=MainTicketView(),
   )
-  await interaction.channel.send(embed=embed, view=MainTicketView())
+
+  await interaction.channel.send(view=v2_view)
   await interaction.response.send_message(
       '구매 패널이 생성되었습니다.', ephemeral=True
   )
@@ -984,16 +968,15 @@ async def create_inquiry(interaction: discord.Interaction):
     )
     return
 
-  embed = discord.Embed(
+  v2_view = build_v2_panel_layout(
       title='📩 문의하기',
       description=(
-          f'{SeparatorBuilder.line("bold")}\n'
-          '오류 문의, 기타 문의를 원하시면,\n아래 **선택하기** 버튼을 눌러주세요.\n'
-          f'{SeparatorBuilder.line("thin")}'
+          '오류 문의, 기타 문의를 원하시면,\n아래 **선택하기** 버튼을 눌러주세요.'
       ),
-      color=0x2B2D31,
+      components_view=InquirySelectView(),
   )
-  await interaction.channel.send(embed=embed, view=InquirySelectView())
+
+  await interaction.channel.send(view=v2_view)
   await interaction.response.send_message(
       '문의 패널이 생성되었습니다.', ephemeral=True
   )
@@ -1011,22 +994,22 @@ async def create_role_panel(interaction: discord.Interaction):
     return
 
   description_text = (
-      f'{SeparatorBuilder.line("bold")}\n'
-      '아래 희망하는 알림을 받아보세요!\n'
-      f'{SeparatorBuilder.line("thin")}\n\n'
+      '아래 희망하는 알림을 받아보세요!\n\n'
       f'{EMOJI_BUX} ≫ **로벅스 입고 알림**\n'
       '↳ 로벅스 재고 입고 시 알림이 제공됩니다.\n\n'
       f'{EMOJI_MONEY} ≫ **인게임 상품 입고 알림**\n'
       '↳ 인게임 상품 재고 입고 시 알림이 제공됩니다.\n\n'
       f'{EMOJI_GIFT} ≫ **이벤트 알림**\n'
-      '↳ 이벤트 시작 시 알림이 제공됩니다.\n'
-      f'{SeparatorBuilder.line("bold")}'
+      '↳ 이벤트 시작 시 알림이 제공됩니다.'
   )
 
-  embed = discord.Embed(
-      title='입고 알림 받기 🔔', description=description_text, color=0x2B2D31
+  v2_view = build_v2_panel_layout(
+      title='입고 알림 받기 🔔',
+      description=description_text,
+      components_view=NotificationRoleView(),
   )
-  await interaction.channel.send(embed=embed, view=NotificationRoleView())
+
+  await interaction.channel.send(view=v2_view)
   await interaction.response.send_message(
       '알림 역할 패널이 생성되었습니다.', ephemeral=True
   )
@@ -1055,13 +1038,7 @@ async def send_message(
 
   embed = None
   if title:
-    embed = discord.Embed(
-        title=title,
-        description=(
-            f'{SeparatorBuilder.line("thin")}\n{content}\n{SeparatorBuilder.line("thin")}'
-        ),
-        color=0x2B2D31,
-    )
+    embed = discord.Embed(title=title, description=content, color=0x2B2D31)
     send_content = None
   else:
     send_content = content
