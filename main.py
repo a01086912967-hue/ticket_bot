@@ -109,7 +109,7 @@ async def send_notice_response(interaction: discord.Interaction):
   await interaction.response.send_message(notice_text, ephemeral=True)
 
 
-# ==================== [ Components V2 Views ] ====================
+# ==================== [ Views & Controls ] ====================
 
 
 class BuyTicketControlView(discord.ui.View):
@@ -254,16 +254,14 @@ class CloseConfirmView(discord.ui.View):
     closed_category = guild.get_channel(CLOSED_CATEGORY_ID)
     new_name = f'closed-{orig_name}'
 
-    # 1) 채널 카테고리 이동 및 이름 변경
     try:
       edit_kwargs = {'name': new_name, 'topic': new_topic}
       if closed_category:
         edit_kwargs['category'] = closed_category
       await channel.edit(**edit_kwargs)
     except Exception as e:
-      print(f'채널 닫기 처리 중 오류: {e}')
+      print(f'채널 닫기 처리 오류: {e}')
 
-    # 2) 티켓 생성자(구매자/문의자) 접근 권한 차단
     if owner_id != '0':
       owner_member = guild.get_member(int(owner_id))
       if owner_member:
@@ -272,7 +270,7 @@ class CloseConfirmView(discord.ui.View):
               owner_member, view_channel=False, read_messages=False
           )
         except Exception as e:
-          print(f'생성자 권한 차단 오류: {e}')
+          print(f'권한 차단 오류: {e}')
 
     red_embed = discord.Embed(
         title='🔒 티켓이 마감되었습니다.',
@@ -285,7 +283,7 @@ class CloseConfirmView(discord.ui.View):
 
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     black_embed = discord.Embed(
-        title='⚙️ 관리자 티켓 관리', color=0x2B2D31
+        title='⚙️️ 관리자 티켓 관리', color=0x2B2D31
     )
     owner_mention = f'<@{owner_id}>' if owner_id != '0' else '알 수 없음'
     black_embed.add_field(
@@ -368,7 +366,6 @@ class ClosedTicketView(discord.ui.View):
     except Exception as e:
       print(f'채널 복구 오류: {e}')
 
-    # 티켓 생성자 권한 복구
     if owner_id != '0':
       owner_member = guild.get_member(int(owner_id))
       if owner_member:
@@ -383,7 +380,7 @@ class ClosedTicketView(discord.ui.View):
           )
           await channel.set_permissions(owner_member, overwrite=user_overwrite)
         except Exception as e:
-          print(f'생성자 권한 복구 오류: {e}')
+          print(f'권한 복구 오류: {e}')
 
     try:
       await interaction.message.delete()
@@ -727,7 +724,7 @@ class NotificationRoleView(discord.ui.View):
     )
 
 
-# --- 드롭다운 및 메인 패널 Components V2 ---
+# --- 드롭다운 및 메인 패널 ---
 class TypeSelect(discord.ui.Select):
 
   def __init__(self, seller: str):
@@ -855,31 +852,6 @@ class InquirySelectView(discord.ui.View):
     await send_notice_response(interaction)
 
 
-# ==================== [ Components V2 Layout Helpers ] ====================
-
-
-def build_v2_panel_layout(
-    title: str, description: str, components_view: discord.ui.View
-) -> discord.ui.LayoutView:
-  """Components V2 (Container, TextDisplay, Separator) 기반 패널 생성기"""
-  layout = discord.ui.LayoutView()
-  container = discord.ui.Container()
-
-  # Title Header & Divider
-  container.add_item(discord.ui.TextDisplay(f'## {title}'))
-  container.add_item(discord.ui.Separator())
-
-  # Body Description
-  container.add_item(discord.ui.TextDisplay(description))
-
-  # Action Controls
-  for child in components_view.children:
-    container.add_item(child)
-
-  layout.add_item(container)
-  return layout
-
-
 # ==================== [ Bot Init & Commands ] ====================
 
 
@@ -943,14 +915,13 @@ async def create_ticket(interaction: discord.Interaction):
     )
     return
 
-  # V2 LayoutView 생성
-  v2_view = build_v2_panel_layout(
+  embed = discord.Embed(
       title='🛒 구매 티켓 문의',
       description='아래 메뉴에서 원하는 판매자를 선택해 주세요.',
-      components_view=MainTicketView(),
+      color=0x2B2D31,
   )
 
-  await interaction.channel.send(view=v2_view)
+  await interaction.channel.send(embed=embed, view=MainTicketView())
   await interaction.response.send_message(
       '구매 패널이 생성되었습니다.', ephemeral=True
   )
@@ -968,15 +939,15 @@ async def create_inquiry(interaction: discord.Interaction):
     )
     return
 
-  v2_view = build_v2_panel_layout(
+  embed = discord.Embed(
       title='📩 문의하기',
       description=(
           '오류 문의, 기타 문의를 원하시면,\n아래 **선택하기** 버튼을 눌러주세요.'
       ),
-      components_view=InquirySelectView(),
+      color=0x2B2D31,
   )
 
-  await interaction.channel.send(view=v2_view)
+  await interaction.channel.send(embed=embed, view=InquirySelectView())
   await interaction.response.send_message(
       '문의 패널이 생성되었습니다.', ephemeral=True
   )
@@ -993,23 +964,21 @@ async def create_role_panel(interaction: discord.Interaction):
     )
     return
 
-  description_text = (
-      '아래 희망하는 알림을 받아보세요!\n\n'
-      f'{EMOJI_BUX} ≫ **로벅스 입고 알림**\n'
-      '↳ 로벅스 재고 입고 시 알림이 제공됩니다.\n\n'
-      f'{EMOJI_MONEY} ≫ **인게임 상품 입고 알림**\n'
-      '↳ 인게임 상품 재고 입고 시 알림이 제공됩니다.\n\n'
-      f'{EMOJI_GIFT} ≫ **이벤트 알림**\n'
-      '↳ 이벤트 시작 시 알림이 제공됩니다.'
-  )
-
-  v2_view = build_v2_panel_layout(
+  embed = discord.Embed(
       title='입고 알림 받기 🔔',
-      description=description_text,
-      components_view=NotificationRoleView(),
+      description=(
+          '아래 희망하는 알림을 받아보세요!\n\n'
+          f'{EMOJI_BUX} ≫ **로벅스 입고 알림**\n'
+          '↳ 로벅스 재고 입고 시 알림이 제공됩니다.\n\n'
+          f'{EMOJI_MONEY} ≫ **인게임 상품 입고 알림**\n'
+          '↳ 인게임 상품 재고 입고 시 알림이 제공됩니다.\n\n'
+          f'{EMOJI_GIFT} ≫ **이벤트 알림**\n'
+          '↳ 이벤트 시작 시 알림이 제공됩니다.'
+      ),
+      color=0x2B2D31,
   )
 
-  await interaction.channel.send(view=v2_view)
+  await interaction.channel.send(embed=embed, view=NotificationRoleView())
   await interaction.response.send_message(
       '알림 역할 패널이 생성되었습니다.', ephemeral=True
   )
