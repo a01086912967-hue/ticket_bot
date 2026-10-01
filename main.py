@@ -95,20 +95,6 @@ def is_admin_or_staff(user: discord.Member) -> bool:
   return False
 
 
-# --- 공통 함수: 주의사항 메시지 전송 ---
-async def send_notice_response(interaction: discord.Interaction):
-  notice_text = (
-      '<a:ICON3:1373525554539790377> **주의 사항**'
-      ' <a:ICON3:1373525554539790377>\n\n'
-      '1. <#1395756963169828944>\n'
-      '2. <#1372688635572519042>\n'
-      '3. <#1375702918778327141>\n\n'
-      "위 채널 전부 필독하기 <a:Pink_exclamation_point:1373524874584391741>\n채널과 '알"
-      " 수 없음' 클릭해서 내용을 확인하세요."
-  )
-  await interaction.response.send_message(notice_text, ephemeral=True)
-
-
 # ==================== [ Views & Controls ] ====================
 
 
@@ -791,23 +777,12 @@ class SellerSelect(discord.ui.Select):
     )
 
 
-# 메인 구매 패널 View (드롭다운: row 0 / 주의사항 버튼: row 1)
+# 메인 구매 패널 View (주의사항 버튼 제거됨)
 class MainTicketView(discord.ui.View):
 
   def __init__(self):
     super().__init__(timeout=None)
     self.add_item(SellerSelect())
-
-  @discord.ui.button(
-      label='⚠ 주의사항',
-      style=discord.ButtonStyle.danger,
-      custom_id='persistent_btn_notice_main',
-      row=1,
-  )
-  async def btn_notice(
-      self, interaction: discord.Interaction, button: discord.ui.Button
-  ):
-    await send_notice_response(interaction)
 
 
 class InquiryDropdown(discord.ui.Select):
@@ -835,23 +810,12 @@ class InquiryDropdown(discord.ui.Select):
     await interaction.response.send_modal(modal)
 
 
-# 문의 패널 View (선택하기 드롭다운: row 0 / 주의사항 버튼: row 1)
+# 문의 패널 View (주의사항 버튼 제거됨)
 class InquirySelectView(discord.ui.View):
 
   def __init__(self):
     super().__init__(timeout=None)
     self.add_item(InquiryDropdown())
-
-  @discord.ui.button(
-      label='⚠️ 주의사항',
-      style=discord.ButtonStyle.danger,
-      custom_id='persistent_btn_notice_inquiry',
-      row=1,
-  )
-  async def btn_notice(
-      self, interaction: discord.Interaction, button: discord.ui.Button
-  ):
-    await send_notice_response(interaction)
 
 
 # ==================== [ Bot Init & Commands ] ====================
@@ -944,7 +908,8 @@ async def create_inquiry(interaction: discord.Interaction):
   embed = discord.Embed(
       title='📩 문의하기',
       description=(
-          '오류 문의, 기타 문의를 원하시면,\n아래 **선택하기** 버튼을 눌러주세요.'
+          '오류 문의, 기타 문의를 원하시면,\n아래 **선택하기** 드롭다운을'
+          ' 눌러주세요.'
       ),
       color=0x2B2D31,
   )
