@@ -283,7 +283,7 @@ class CloseConfirmView(discord.ui.View):
 
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     black_embed = discord.Embed(
-        title='⚙️️ 관리자 티켓 관리', color=0x2B2D31
+        title='⚙ 관리자 티켓 관리', color=0x2B2D31
     )
     owner_mention = f'<@{owner_id}>' if owner_id != '0' else '알 수 없음'
     black_embed.add_field(
@@ -791,6 +791,7 @@ class SellerSelect(discord.ui.Select):
     )
 
 
+# 메인 구매 패널 View (드롭다운: row 0 / 주의사항 버튼: row 1)
 class MainTicketView(discord.ui.View):
 
   def __init__(self):
@@ -798,7 +799,7 @@ class MainTicketView(discord.ui.View):
     self.add_item(SellerSelect())
 
   @discord.ui.button(
-      label='⚠️️ 주의사항',
+      label='⚠ 주의사항',
       style=discord.ButtonStyle.danger,
       custom_id='persistent_btn_notice_main',
       row=1,
@@ -834,6 +835,7 @@ class InquiryDropdown(discord.ui.Select):
     await interaction.response.send_modal(modal)
 
 
+# 문의 패널 View (선택하기 드롭다운: row 0 / 주의사항 버튼: row 1)
 class InquirySelectView(discord.ui.View):
 
   def __init__(self):
