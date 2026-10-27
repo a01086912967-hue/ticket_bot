@@ -57,8 +57,8 @@ def clean_text(s: str, fallback: str = '-') -> str:
     if not s:
         return fallback
     s = re.sub(
-        '[\U00010000-\U0010ffff​-‏‪-‮⁠-⁯'
-        '︀-️☀-➿⬀-⯿]',
+        r'[\U00010000-\U0010FFFF\u200B-\u200F\u202A-\u202E\u2060-\u206F'
+        r'\uFE00-\uFE0F\u2600-\u27BF\u2B00-\u2BFF]',
         '',
         s,
     )
