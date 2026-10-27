@@ -3,33 +3,35 @@ from datetime import datetime
 import os
 import re
 import threading
+import time
 import traceback
-
+ 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
 from flask import Flask
-
+ 
 # ==================== [ Railway Keep-Alive 웹서버 ] ====================
 app = Flask('')
-
-
+ 
+ 
 @app.route('/')
 def home():
     return 'Bot is alive!'
-
-
+ 
+ 
 def run_web():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
-
-
+ 
+ 
 def keep_alive():
     t = threading.Thread(target=run_web)
     t.daemon = True
     t.start()
-
-
+ 
+ 
 # ==================== [ ID 및 이모지 설정 구간 ] ====================
 ROLE_IDS = {
     '소뚜': 1543547595350220810,
@@ -37,34 +39,37 @@ ROLE_IDS = {
     '쥬스': 1543547625977151628,
     '프노': 1543547960422572053,
 }
-
+ 
 NOTIFICATION_ROLES = {
     'roblox': 1393460612046000218,
     'ingame': 1393460552327499867,
     'event': 1461769960014741587,
 }
-
+ 
 EMOJI_BUX = '<:bux_purple:1461792088718053569>'
 EMOJI_MONEY = '<a:Money:1373524938723557507>'
 EMOJI_GIFT = '<a:Gift_box:1373525157163040770>'
-
+ 
 ADMIN_ROLE_ID = 1396885435850162317
-
+ 
 CATEGORY_IDS = {
     '소뚜': {'로벅스': 1543555550485282877, '인게임': 1543555594420494428},
     '3월': {'로벅스': 1543574405836316742, '기타': 1543575899516047480},
     '쥬스': {'인게임': 1543572620597796874, '로벅스': 1543555641304551525},
     '프노': {'로벅스': 1373102489372590181},
 }
-
+ 
 INQUIRY_CATEGORY_ID = 1463905394618536008
 CLOSED_CATEGORY_ID = 1516393469436887160
+ 
+# ★ 구매로그 채널 ID를 여기에 넣어주세요 ★
+PURCHASE_LOG_CHANNEL_ID = 0
 # =========================================================
-
+ 
 intents = discord.Intents.default()
 intents.message_content = True
-
-
+ 
+ 
 # --- 토픽 데이터 파싱/생성 헬퍼 ---
 def parse_topic_data(topic: str):
     data = {}
@@ -76,13 +81,13 @@ def parse_topic_data(topic: str):
             k, v = part.split(':', 1)
             data[k.strip()] = v.strip()
     return data
-
-
+ 
+ 
 def build_topic_data(owner_id: int, orig_cat_id: int, orig_name: str):
     clean_name = orig_name.replace('closed-', '')
     return f'OWNER:{owner_id}|ORIG_CAT:{orig_cat_id}|ORIG_NAME:{clean_name}'
-
-
+ 
+ 
 # --- 관리자 권한 체크 헬퍼 ---
 def is_admin_or_staff(user: discord.Member) -> bool:
     user_role_ids = [r.id for r in user.roles]
@@ -93,16 +98,220 @@ def is_admin_or_staff(user: discord.Member) -> bool:
     ):
         return True
     return False
-
-
+ 
+ 
+# ==================== [ 로블록스 API 헬퍼 ] ====================
+async def get_roblox_user(username: str):
+    """로블 닉네임 -> (userId, 정확한 닉네임). 실패 시 (None, None)"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                'https://users.roblox.com/v1/usernames/users',
+                json={'usernames': [username], 'excludeBannedUsers': False},
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as resp:
+                data = await resp.json()
+                if data.get('data'):
+                    u = data['data'][0]
+                    return u['id'], u['name']
+    except Exception as e:
+        print(f'로블 유저 조회 오류: {e}')
+    return None, None
+ 
+ 
+async def get_roblox_avatar(user_id: int, kind: str = 'avatar-headshot'):
+    """kind: 'avatar-headshot'(얼굴) / 'avatar'(전신) / 'avatar-bust'(상반신)"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f'https://thumbnails.roblox.com/v1/users/{kind}',
+                params={'userIds': user_id, 'size': '420x420', 'format': 'Png'},
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as resp:
+                data = await resp.json()
+                if data.get('data') and data['data'][0].get('imageUrl'):
+                    return data['data'][0]['imageUrl']
+    except Exception as e:
+        print(f'로블 아바타 조회 오류: {e}')
+    return None
+ 
+ 
+# ==================== [ 티켓 양식 파싱 + 구매로그 전송 ] ====================
+async def parse_ticket_info(channel: discord.TextChannel):
+    """티켓 첫 메시지의 양식 임베드에서 정보 추출.
+    - 로벅스 티켓: 로벅스 수량 / 자급방식 / 로블 아이디 / 아이템 이름
+    - 인게임 티켓: 아이템 이름 / 로블 아이디 / 아이템 수량
+    - 기타 티켓  : 아이템 이름 / 아이템 수량
+    """
+    info = {
+        'is_robux': False,
+        'robux_amount': None,
+        'method': None,
+        'roblox': None,
+        'item': None,
+        'qty': None,
+    }
+    async for msg in channel.history(limit=10, oldest_first=True):
+        if not msg.embeds:
+            continue
+        found = False
+        for emb in msg.embeds:
+            for f in emb.fields:
+                val = f.value.replace('```', '').strip()
+                name = f.name
+                if '로벅스 수량' in name:  # 로벅스 티켓의 '구매할 수량' = 로벅스 수량
+                    info['is_robux'] = True
+                    info['robux_amount'] = val
+                    found = True
+                elif '자급방식' in name:
+                    info['method'] = val
+                    found = True
+                elif '로블 아이디' in name:  # 로블록스 닉네임
+                    info['roblox'] = val
+                    found = True
+                elif '아이템' in name and '이름' in name:
+                    info['item'] = val
+                    found = True
+                elif '아이템' in name and '수량' in name:
+                    info['qty'] = val
+                    found = True
+        if found:
+            break
+    return info
+ 
+ 
+def format_qty(qty: str) -> str:
+    """숫자면 '3개', 이미 단위가 있으면 그대로"""
+    if not qty:
+        return '-'
+    q = qty.strip()
+    return f'{q}개' if q.isdigit() else q
+ 
+ 
+def format_robux(amount: str) -> str:
+    if not amount:
+        return '-'
+    a = amount.strip()
+    return a if '로벅스' in a else f'{a} 로벅스'
+ 
+ 
+async def send_purchase_log(
+    interaction: discord.Interaction, owner_id: str | None
+):
+    """지급완료 시 구매로그 채널에 임베드 전송"""
+    if not PURCHASE_LOG_CHANNEL_ID:
+        return
+    guild = interaction.guild
+    log_channel = guild.get_channel(PURCHASE_LOG_CHANNEL_ID)
+    if not log_channel:
+        print('구매로그 채널을 찾을 수 없습니다. PURCHASE_LOG_CHANNEL_ID 확인!')
+        return
+ 
+    info = await parse_ticket_info(interaction.channel)
+    buyer_mention = f'<@{owner_id}>' if owner_id else '구매자'
+    owner_member = guild.get_member(int(owner_id)) if owner_id else None
+    now_ts = int(time.time())
+ 
+    # ---------- 로벅스 티켓: 로블록스 아바타 포함 ----------
+    if info['is_robux']:
+        robux_text = format_robux(info['robux_amount'])
+ 
+        roblox_id, roblox_name = (None, None)
+        headshot, fullbody = None, None
+        if info['roblox']:
+            roblox_id, roblox_name = await get_roblox_user(info['roblox'])
+            if roblox_id:
+                headshot = await get_roblox_avatar(roblox_id, 'avatar-headshot')
+                fullbody = await get_roblox_avatar(roblox_id, 'avatar')
+ 
+        embed = discord.Embed(
+            title='🎉 구매 감사합니다!',
+            description=(
+                f'{buyer_mention}님, **{robux_text}** 구매 감사합니다! '
+                f'{EMOJI_GIFT}\n앞으로도 더 좋은 서비스로 보답할게요 💜'
+            ),
+            color=0x9B59B6,
+            timestamp=discord.utils.utcnow(),
+        )
+ 
+        if owner_member:
+            embed.set_author(
+                name=owner_member.display_name,
+                icon_url=owner_member.display_avatar.url,
+            )
+ 
+        if info['roblox']:
+            nick = roblox_name or info['roblox']
+            if roblox_id:
+                nick = f'[{nick}](https://www.roblox.com/users/{roblox_id}/profile)'
+            embed.add_field(name='🎮 로블록스 닉네임', value=nick, inline=True)
+ 
+        embed.add_field(name=f'{EMOJI_BUX} 로벅스 수량', value=robux_text, inline=True)
+        if info['method']:
+            embed.add_field(name='💳 자급방식', value=info['method'], inline=True)
+        embed.add_field(
+            name='🧑‍💼 담당자', value=interaction.user.mention, inline=True
+        )
+        embed.add_field(
+            name='🕒 지급 시간',
+            value=f'<t:{now_ts}:F> (<t:{now_ts}:R>)',
+            inline=False,
+        )
+ 
+        if headshot:
+            embed.set_thumbnail(url=headshot)
+        if fullbody:
+            embed.set_image(url=fullbody)
+ 
+        embed.set_footer(text='지급 완료 • 이용해 주셔서 감사합니다')
+        await log_channel.send(embed=embed)
+        return
+ 
+    # ---------- 인게임 / 기타 티켓: 아이템 이름 + 개수 (아바타 없음) ----------
+    item_name = info['item'] or '상품'
+    qty_text = format_qty(info['qty'])
+ 
+    embed = discord.Embed(
+        title='🎉 구매 감사합니다!',
+        description=(
+            f'{buyer_mention}님, **{item_name}** 구매 감사합니다! '
+            f'{EMOJI_GIFT}\n앞으로도 더 좋은 서비스로 보답할게요 💜'
+        ),
+        color=0x5865F2,
+        timestamp=discord.utils.utcnow(),
+    )
+ 
+    if owner_member:
+        embed.set_author(
+            name=owner_member.display_name,
+            icon_url=owner_member.display_avatar.url,
+        )
+        embed.set_thumbnail(url=owner_member.display_avatar.url)
+ 
+    embed.add_field(name=f'{EMOJI_MONEY} 구매 아이템', value=item_name, inline=True)
+    embed.add_field(name='📦 구매 개수', value=qty_text, inline=True)
+    if info['roblox']:
+        embed.add_field(name='🎮 로블록스 닉네임', value=info['roblox'], inline=True)
+    embed.add_field(
+        name='🧑‍💼 담당자', value=interaction.user.mention, inline=True
+    )
+    embed.add_field(
+        name='🕒 지급 시간',
+        value=f'<t:{now_ts}:F> (<t:{now_ts}:R>)',
+        inline=False,
+    )
+    embed.set_footer(text='지급 완료 • 이용해 주셔서 감사합니다')
+    await log_channel.send(embed=embed)
+ 
+ 
 # ==================== [ Views & Controls ] ====================
-
-
+ 
+ 
 class BuyTicketControlView(discord.ui.View):
-
+ 
     def __init__(self):
         super().__init__(timeout=None)
-
+ 
     @discord.ui.button(
         label='🔒 닫기',
         style=discord.ButtonStyle.secondary,
@@ -118,7 +327,7 @@ class BuyTicketControlView(discord.ui.View):
                 ephemeral=True,
             )
             return
-
+ 
         embed = discord.Embed(
             title='🔒 티켓을 닫으시겠습니까?',
             description=(
@@ -130,7 +339,7 @@ class BuyTicketControlView(discord.ui.View):
         await interaction.response.send_message(
             embed=embed, view=CloseConfirmView(), ephemeral=False
         )
-
+ 
     @discord.ui.button(
         label='🎁 지급완료',
         style=discord.ButtonStyle.secondary,
@@ -145,14 +354,15 @@ class BuyTicketControlView(discord.ui.View):
                 '❌ 지급완료 처리 권한이 없습니다.', ephemeral=True
             )
             return
-
+ 
         button.disabled = True
         await interaction.response.edit_message(view=self)
-
+ 
         topic_data = parse_topic_data(interaction.channel.topic)
         owner_id = topic_data.get('OWNER')
         mention_text = f'<@{owner_id}>' if owner_id else ''
-
+ 
+        # 1) 티켓 채널 안내 임베드 (기존)
         complete_embed = discord.Embed(
             description=(
                 '**아이템이 정상적으로 지급되었어요.'
@@ -164,13 +374,20 @@ class BuyTicketControlView(discord.ui.View):
         await interaction.followup.send(
             content=mention_text, embed=complete_embed
         )
-
-
+ 
+        # 2) 구매로그 채널 임베드 (신규)
+        try:
+            await send_purchase_log(interaction, owner_id)
+        except Exception as e:
+            print(f'구매로그 전송 오류: {e}')
+            traceback.print_exc()
+ 
+ 
 class InquiryTicketControlView(discord.ui.View):
-
+ 
     def __init__(self):
         super().__init__(timeout=None)
-
+ 
     @discord.ui.button(
         label='🔒 닫기',
         style=discord.ButtonStyle.secondary,
@@ -185,7 +402,7 @@ class InquiryTicketControlView(discord.ui.View):
                 '❌ 티켓을 닫을 권한이 없습니다. (관리자 전용)', ephemeral=True
             )
             return
-
+ 
         embed = discord.Embed(
             title='🔒 티켓을 닫으시겠습니까?',
             description=(
@@ -197,13 +414,13 @@ class InquiryTicketControlView(discord.ui.View):
         await interaction.response.send_message(
             embed=embed, view=CloseConfirmView(), ephemeral=False
         )
-
-
+ 
+ 
 class CloseConfirmView(discord.ui.View):
-
+ 
     def __init__(self):
         super().__init__(timeout=None)
-
+ 
     @discord.ui.button(
         label='닫기',
         style=discord.ButtonStyle.red,
@@ -218,36 +435,36 @@ class CloseConfirmView(discord.ui.View):
                 '❌ 권한이 없습니다.', ephemeral=True
             )
             return
-
+ 
         await interaction.response.defer()
         channel = interaction.channel
         guild = interaction.guild
-
+ 
         try:
             await interaction.message.delete()
         except:
             pass
-
+ 
         topic_data = parse_topic_data(channel.topic)
         owner_id = topic_data.get('OWNER', '0')
-
+ 
         orig_name = topic_data.get('ORIG_NAME')
         if not orig_name:
             orig_name = channel.name.replace('closed-', '')
         else:
             orig_name = orig_name.replace('closed-', '')
-
+ 
         orig_cat_id = topic_data.get('ORIG_CAT')
         if not orig_cat_id or orig_cat_id == '0':
             if channel.category_id and channel.category_id != CLOSED_CATEGORY_ID:
                 orig_cat_id = str(channel.category_id)
             else:
                 orig_cat_id = '0'
-
+ 
         new_topic = build_topic_data(owner_id, orig_cat_id, orig_name)
         closed_category = guild.get_channel(CLOSED_CATEGORY_ID)
         new_name = f'closed-{orig_name}'
-
+ 
         try:
             edit_kwargs = {'name': new_name, 'topic': new_topic}
             if closed_category:
@@ -255,7 +472,7 @@ class CloseConfirmView(discord.ui.View):
             await channel.edit(**edit_kwargs)
         except Exception as e:
             print(f'채널 닫기 처리 오류: {e}')
-
+ 
         if owner_id != '0':
             owner_member = guild.get_member(int(owner_id))
             if owner_member:
@@ -265,7 +482,7 @@ class CloseConfirmView(discord.ui.View):
                     )
                 except Exception as e:
                     print(f'권한 차단 오류: {e}')
-
+ 
         red_embed = discord.Embed(
             title='🔒 티켓이 마감되었습니다.',
             description=(
@@ -274,7 +491,7 @@ class CloseConfirmView(discord.ui.View):
             ),
             color=0xED4245,
         )
-
+ 
         now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         black_embed = discord.Embed(
             title='⚙ 관리자 티켓 관리', color=0x2B2D31
@@ -289,11 +506,11 @@ class CloseConfirmView(discord.ui.View):
         black_embed.add_field(
             name='마감 일시', value=f'`{now_str}`', inline=False
         )
-
+ 
         await channel.send(
             embeds=[red_embed, black_embed], view=ClosedTicketView()
         )
-
+ 
     @discord.ui.button(
         label='취소',
         style=discord.ButtonStyle.secondary,
@@ -310,13 +527,13 @@ class CloseConfirmView(discord.ui.View):
         await interaction.response.send_message(
             '티켓 닫기를 취소했습니다.', ephemeral=True
         )
-
-
+ 
+ 
 class ClosedTicketView(discord.ui.View):
-
+ 
     def __init__(self):
         super().__init__(timeout=None)
-
+ 
     @discord.ui.button(
         label='🔓 티켓 다시 열기',
         style=discord.ButtonStyle.secondary,
@@ -331,27 +548,27 @@ class ClosedTicketView(discord.ui.View):
                 '❌ 권한이 없습니다.', ephemeral=True
             )
             return
-
+ 
         await interaction.response.defer()
         channel = interaction.channel
         guild = interaction.guild
-
+ 
         topic_data = parse_topic_data(channel.topic)
         owner_id = topic_data.get('OWNER', '0')
         orig_cat_id = topic_data.get('ORIG_CAT', '0')
         orig_name = topic_data.get('ORIG_NAME')
-
+ 
         if not orig_name:
             orig_name = channel.name.replace('closed-', '')
         else:
             orig_name = orig_name.replace('closed-', '')
-
+ 
         orig_category = None
         if orig_cat_id and orig_cat_id.isdigit() and int(orig_cat_id) != 0:
             orig_category = guild.get_channel(int(orig_cat_id))
-
+ 
         new_topic = build_topic_data(owner_id, orig_cat_id, orig_name)
-
+ 
         try:
             edit_kwargs = {'name': orig_name, 'topic': new_topic}
             if orig_category:
@@ -359,7 +576,7 @@ class ClosedTicketView(discord.ui.View):
             await channel.edit(**edit_kwargs)
         except Exception as e:
             print(f'채널 복구 오류: {e}')
-
+ 
         if owner_id != '0':
             owner_member = guild.get_member(int(owner_id))
             if owner_member:
@@ -377,12 +594,12 @@ class ClosedTicketView(discord.ui.View):
                     )
                 except Exception as e:
                     print(f'권한 복구 오류: {e}')
-
+ 
         try:
             await interaction.message.delete()
         except:
             pass
-
+ 
         green_embed = discord.Embed(
             title='🔓 티켓이 다시 열렸습니다',
             description=(
@@ -392,7 +609,7 @@ class ClosedTicketView(discord.ui.View):
             color=0x2ECC71,
         )
         await channel.send(embed=green_embed)
-
+ 
     @discord.ui.button(
         label='⛔ 티켓 삭제',
         style=discord.ButtonStyle.secondary,
@@ -407,7 +624,7 @@ class ClosedTicketView(discord.ui.View):
                 '❌ 권한이 없습니다.', ephemeral=True
             )
             return
-
+ 
         await interaction.response.send_message(
             '⏳ 10초 후 티켓이 삭제됩니다.'
         )
@@ -421,11 +638,11 @@ class ClosedTicketView(discord.ui.View):
                 pass
         await asyncio.sleep(1)
         await interaction.channel.delete()
-
-
+ 
+ 
 # --- 양식 입력 모달 ---
 class TicketModal(discord.ui.Modal):
-
+ 
     def __init__(
         self, seller: str, category_type: str, is_inquiry: bool = False
     ):
@@ -433,7 +650,7 @@ class TicketModal(discord.ui.Modal):
         self.seller = seller
         self.category_type = category_type
         self.is_inquiry = is_inquiry
-
+ 
         if category_type == '로벅스':
             self.q1 = discord.ui.TextInput(
                 label='구매할 로벅스 수량을 입력해 주세요.',
@@ -453,7 +670,7 @@ class TicketModal(discord.ui.Modal):
             )
             for item in [self.q1, self.q2, self.q3, self.q4]:
                 self.add_item(item)
-
+ 
         elif category_type == '인게임':
             self.q1 = discord.ui.TextInput(
                 label='구매할 아이템 이름을 적어주세요.'
@@ -466,7 +683,7 @@ class TicketModal(discord.ui.Modal):
             )
             for item in [self.q1, self.q2, self.q3]:
                 self.add_item(item)
-
+ 
         elif category_type == '기타':
             self.q1 = discord.ui.TextInput(
                 label='구매할 아이템의 이름을 적어주세요.'
@@ -476,7 +693,7 @@ class TicketModal(discord.ui.Modal):
             )
             for item in [self.q1, self.q2]:
                 self.add_item(item)
-
+ 
         else:
             self.q1 = discord.ui.TextInput(
                 label='문의하실 내용을 구체적으로 작성해 주세요.',
@@ -484,11 +701,11 @@ class TicketModal(discord.ui.Modal):
                 placeholder='문의 내용을 상세히 작성해 주세요.',
             )
             self.add_item(self.q1)
-
+ 
     async def on_submit(self, interaction: discord.Interaction):
         try:
             guild = interaction.guild
-
+ 
             category = None
             if self.is_inquiry:
                 category = guild.get_channel(INQUIRY_CATEGORY_ID)
@@ -498,12 +715,12 @@ class TicketModal(discord.ui.Modal):
                 )
                 if cat_id:
                     category = guild.get_channel(cat_id)
-
+ 
             if not category and interaction.channel:
                 category = interaction.channel.category
-
+ 
             admin_role = guild.get_role(ADMIN_ROLE_ID)
-
+ 
             user_overwrite = discord.PermissionOverwrite(
                 view_channel=True,
                 read_messages=True,
@@ -514,7 +731,7 @@ class TicketModal(discord.ui.Modal):
                 add_reactions=False,
                 use_external_emojis=True,
             )
-
+ 
             staff_overwrite = discord.PermissionOverwrite(
                 view_channel=True,
                 read_messages=True,
@@ -525,7 +742,7 @@ class TicketModal(discord.ui.Modal):
                 add_reactions=True,
                 use_external_emojis=True,
             )
-
+ 
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(
                     view_channel=False, read_messages=False
@@ -533,38 +750,38 @@ class TicketModal(discord.ui.Modal):
                 interaction.user: user_overwrite,
                 guild.me: staff_overwrite,
             }
-
+ 
             if not self.is_inquiry:
                 role_id = ROLE_IDS.get(self.seller)
                 role = guild.get_role(role_id) if role_id else None
                 if role:
                     overwrites[role] = staff_overwrite
-
+ 
             if admin_role:
                 overwrites[admin_role] = staff_overwrite
-
+ 
             channel_name = f'티켓-{interaction.user.display_name}'
             orig_cat_id = category.id if category else 0
             topic_str = build_topic_data(
                 interaction.user.id, orig_cat_id, channel_name
             )
-
+ 
             ticket_channel = await guild.create_text_channel(
                 name=channel_name,
                 category=category,
                 topic=topic_str,
                 overwrites=overwrites,
             )
-
+ 
             await interaction.response.send_message(
                 f'티켓이 생성되었습니다: {ticket_channel.mention}',
                 ephemeral=True,
             )
-
+ 
             admin_mention = (
                 admin_role.mention if admin_role else f'<@&{ADMIN_ROLE_ID}>'
             )
-
+ 
             if self.is_inquiry:
                 content_text = (
                     f'{interaction.user.mention}님 안녕하세요.\n잠시 뒤'
@@ -578,7 +795,7 @@ class TicketModal(discord.ui.Modal):
                     f'{interaction.user.mention}님 안녕하세요\n{role_mention}님'
                     f' 이(가) 도착할 예정이에요.\n{admin_mention}'
                 )
-
+ 
             notice_embed = discord.Embed(
                 description=(
                     '관리자를 멘션 하였습니다.\n추가로 멘션 할 경우 처벌될'
@@ -586,7 +803,7 @@ class TicketModal(discord.ui.Modal):
                 ),
                 color=0x2ECC71,
             )
-
+ 
             info_embed = discord.Embed(color=0x2B2D31)
             if self.category_type == '로벅스':
                 info_embed.add_field(
@@ -642,13 +859,13 @@ class TicketModal(discord.ui.Modal):
                     value=f'```\n{self.q1.value}\n```',
                     inline=False,
                 )
-
+ 
             control_view = (
                 InquiryTicketControlView()
                 if self.is_inquiry
                 else BuyTicketControlView()
             )
-
+ 
             await ticket_channel.send(
                 content=content_text,
                 embeds=[notice_embed, info_embed],
@@ -657,26 +874,26 @@ class TicketModal(discord.ui.Modal):
         except Exception as e:
             print(f'Error creating ticket: {e}')
             traceback.print_exc()
-
-
+ 
+ 
 # --- 알림 역할 뷰 ---
 class NotificationRoleView(discord.ui.View):
-
+ 
     def __init__(self):
         super().__init__(timeout=None)
-
+ 
     async def toggle_role(
         self, interaction: discord.Interaction, role_id: int, role_name: str
     ):
         await interaction.response.defer(ephemeral=True)
-
+ 
         role = interaction.guild.get_role(role_id)
         if not role:
             await interaction.followup.send(
                 '❌ 역할을 찾을 수 없습니다.', ephemeral=True
             )
             return
-
+ 
         if role in interaction.user.roles:
             await interaction.user.remove_roles(role)
             await interaction.followup.send(
@@ -687,7 +904,7 @@ class NotificationRoleView(discord.ui.View):
             await interaction.followup.send(
                 f'🔔 **{role_name}** 역할을 지급받았습니다.', ephemeral=True
             )
-
+ 
     @discord.ui.button(
         label='로벅스 알림',
         emoji=discord.PartialEmoji.from_str(EMOJI_BUX),
@@ -701,7 +918,7 @@ class NotificationRoleView(discord.ui.View):
         await self.toggle_role(
             interaction, NOTIFICATION_ROLES['roblox'], '로벅스 입고 알림'
         )
-
+ 
     @discord.ui.button(
         label='인게임 알림',
         emoji=discord.PartialEmoji.from_str(EMOJI_MONEY),
@@ -715,7 +932,7 @@ class NotificationRoleView(discord.ui.View):
         await self.toggle_role(
             interaction, NOTIFICATION_ROLES['ingame'], '인게임 상품 입고 알림'
         )
-
+ 
     @discord.ui.button(
         label='이벤트 알림',
         emoji=discord.PartialEmoji.from_str(EMOJI_GIFT),
@@ -729,11 +946,11 @@ class NotificationRoleView(discord.ui.View):
         await self.toggle_role(
             interaction, NOTIFICATION_ROLES['event'], '이벤트 알림'
         )
-
-
+ 
+ 
 # --- 드롭다운 및 메인 패널 ---
 class TypeSelect(discord.ui.Select):
-
+ 
     def __init__(self, seller: str):
         self.seller = seller
         options = []
@@ -756,27 +973,27 @@ class TypeSelect(discord.ui.Select):
             options = [
                 discord.SelectOption(label='로벅스 구매하기', value='로벅스')
             ]
-
+ 
         super().__init__(
             placeholder='구매 유형을 선택해 주세요.', options=options, row=0
         )
-
+ 
     async def callback(self, interaction: discord.Interaction):
         modal = TicketModal(
             seller=self.seller, category_type=self.values[0], is_inquiry=False
         )
         await interaction.response.send_modal(modal)
-
-
+ 
+ 
 class TypeSelectView(discord.ui.View):
-
+ 
     def __init__(self, seller: str):
         super().__init__(timeout=None)
         self.add_item(TypeSelect(seller))
-
-
+ 
+ 
 class SellerSelect(discord.ui.Select):
-
+ 
     def __init__(self):
         options = [
             discord.SelectOption(label='소뚜', value='소뚜'),
@@ -790,7 +1007,7 @@ class SellerSelect(discord.ui.Select):
             custom_id='persistent_select_seller_main',
             row=0,
         )
-
+ 
     async def callback(self, interaction: discord.Interaction):
         selected_seller = self.values[0]
         await interaction.response.send_message(
@@ -798,18 +1015,18 @@ class SellerSelect(discord.ui.Select):
             view=TypeSelectView(selected_seller),
             ephemeral=True,
         )
-
-
+ 
+ 
 # 메인 구매 패널 View (주의사항 버튼 제거됨)
 class MainTicketView(discord.ui.View):
-
+ 
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(SellerSelect())
-
-
+ 
+ 
 class InquiryDropdown(discord.ui.Select):
-
+ 
     def __init__(self):
         options = [
             discord.SelectOption(
@@ -825,30 +1042,30 @@ class InquiryDropdown(discord.ui.Select):
             custom_id='persistent_select_inquiry_option',
             row=0,
         )
-
+ 
     async def callback(self, interaction: discord.Interaction):
         modal = TicketModal(
             seller='일반문의', category_type=self.values[0], is_inquiry=True
         )
         await interaction.response.send_modal(modal)
-
-
+ 
+ 
 # 문의 패널 View (주의사항 버튼 제거됨)
 class InquirySelectView(discord.ui.View):
-
+ 
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(InquiryDropdown())
-
-
+ 
+ 
 # ==================== [ Bot Init & Commands ] ====================
-
-
+ 
+ 
 class TicketBot(commands.Bot):
-
+ 
     def __init__(self):
         super().__init__(command_prefix='!', intents=intents)
-
+ 
     async def setup_hook(self):
         self.add_view(MainTicketView())
         self.add_view(InquirySelectView())
@@ -857,15 +1074,15 @@ class TicketBot(commands.Bot):
         self.add_view(InquiryTicketControlView())
         self.add_view(CloseConfirmView())
         self.add_view(ClosedTicketView())
-
-
+ 
+ 
 bot = TicketBot()
-
+ 
 DISCORD_INVITE_REGEX = (
     r'(discord\.gg\/[a-zA-Z0-9]+|discord\.com\/invite\/[a-zA-Z0-9]+)'
 )
-
-
+ 
+ 
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user.name}')
@@ -874,13 +1091,13 @@ async def on_ready():
         print(f'Synced {len(synced)} command(s)')
     except Exception as e:
         print(e)
-
-
+ 
+ 
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
         return
-
+ 
     if re.search(DISCORD_INVITE_REGEX, message.content):
         if not is_admin_or_staff(message.author):
             await message.delete()
@@ -890,10 +1107,10 @@ async def on_message(message: discord.Message):
                 delete_after=5,
             )
             return
-
+ 
     await bot.process_commands(message)
-
-
+ 
+ 
 # [명령어 1] /티켓생성
 @bot.tree.command(
     name='티켓생성', description='구매 티켓 패널을 생성합니다. (관리자 전용)'
@@ -904,19 +1121,19 @@ async def create_ticket(interaction: discord.Interaction):
             '❌ 관리자만 사용할 수 있습니다.', ephemeral=True
         )
         return
-
+ 
     embed = discord.Embed(
         title='🛒 구매 티켓 문의',
         description='아래 메뉴에서 원하는 판매자를 선택해 주세요.',
         color=0x2B2D31,
     )
-
+ 
     await interaction.channel.send(embed=embed, view=MainTicketView())
     await interaction.response.send_message(
         '구매 패널이 생성되었습니다.', ephemeral=True
     )
-
-
+ 
+ 
 # [명령어 2] /문의생성
 @bot.tree.command(
     name='문의생성',
@@ -928,7 +1145,7 @@ async def create_inquiry(interaction: discord.Interaction):
             '❌ 관리자만 사용할 수 있습니다.', ephemeral=True
         )
         return
-
+ 
     embed = discord.Embed(
         title='📩 문의하기',
         description=(
@@ -937,13 +1154,13 @@ async def create_inquiry(interaction: discord.Interaction):
         ),
         color=0x2B2D31,
     )
-
+ 
     await interaction.channel.send(embed=embed, view=InquirySelectView())
     await interaction.response.send_message(
         '문의 패널이 생성되었습니다.', ephemeral=True
     )
-
-
+ 
+ 
 # [명령어 3] /역할
 @bot.tree.command(
     name='역할', description='알림 역할 지급 패널을 생성합니다. (관리자 전용)'
@@ -954,7 +1171,7 @@ async def create_role_panel(interaction: discord.Interaction):
             '❌ 이 명령어는 관리자만 사용할 수 있습니다.', ephemeral=True
         )
         return
-
+ 
     embed = discord.Embed(
         title='입고 알림 받기 🔔',
         description=(
@@ -968,13 +1185,13 @@ async def create_role_panel(interaction: discord.Interaction):
         ),
         color=0x2B2D31,
     )
-
+ 
     await interaction.channel.send(embed=embed, view=NotificationRoleView())
     await interaction.response.send_message(
         '알림 역할 패널이 생성되었습니다.', ephemeral=True
     )
-
-
+ 
+ 
 # [명령어 4] /보내기
 @bot.tree.command(
     name='보내기', description='메시지 또는 임베드를 전송합니다.'
@@ -995,9 +1212,9 @@ async def send_message(
             '❌ 사용 권한이 없습니다.', ephemeral=True
         )
         return
-
+ 
     target_channel = channel or interaction.channel
-
+ 
     embed = None
     if title:
         embed = discord.Embed(
@@ -1006,7 +1223,7 @@ async def send_message(
         send_content = None
     else:
         send_content = content
-
+ 
     try:
         await target_channel.send(content=send_content, embed=embed)
         await interaction.response.send_message(
@@ -1017,8 +1234,8 @@ async def send_message(
         await interaction.response.send_message(
             f'❌ 전송 실패: {e}', ephemeral=True
         )
-
-
+ 
+ 
 # ==================== [ 실행 ] ====================
 keep_alive()
 TOKEN = os.environ.get('DISCORD_TOKEN')
@@ -1026,3 +1243,4 @@ if TOKEN:
     bot.run(TOKEN)
 else:
     print('Error: DISCORD_TOKEN Environment Variable is missing.')
+ 
