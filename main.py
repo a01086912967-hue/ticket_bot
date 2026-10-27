@@ -13,6 +13,8 @@ from discord import app_commands
 from discord.ext import commands
 from flask import Flask
  
+from purchase_card import render_purchase_card
+ 
 # ==================== [ Railway Keep-Alive 웹서버 ] ====================
 app = Flask('')
  
@@ -233,10 +235,116 @@ def format_robux(amount: str) -> str:
     return a if '로벅스' in a else f'{a} 로벅스'
  
  
+async def fetch_image_bytes(url: str):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status == 200:
+                    return await resp.read()
+    except Exception as e:
+        print(f'이미지 다운로드 오류: {e}')
+    return None
+ 
+ 
 async def send_purchase_log(
     interaction: discord.Interaction, owner_id: str | None
 ):
-    """지급완료 시 구매로그 채널에 임베드 전송"""
+    """지급완료 시 구매로그 채널에 '구매 감사 카드 이미지' 전송.
+    이미지 생성에 실패하면(폰트 누락 등) 기존 임베드 방식으로 대신 전송."""
+    log_channel_id = get_log_channel_id()
+    if not log_channel_id:
+        print('구매로그 채널이 지정되지 않았습니다. /구매로그채널 로 지정해 주세요.')
+        return
+    guild = interaction.guild
+    log_channel = guild.get_channel(log_channel_id)
+    if not log_channel:
+        print('구매로그 채널을 찾을 수 없습니다. /구매로그채널 로 다시 지정해 주세요.')
+        return
+ 
+    try:
+        info = await parse_ticket_info(interaction.channel)
+        owner_member = guild.get_member(int(owner_id)) if owner_id else None
+        buyer_mention = f'<@{owner_id}>' if owner_id else '구매자'
+        buyer_name = owner_member.display_name if owner_member else '구매자'
+        staff_name = interaction.user.display_name
+ 
+        discord_avatar_bytes = None
+        if owner_member:
+            discord_avatar_bytes = await fetch_image_bytes(
+                owner_member.display_avatar.replace(
+                    size=512, format='png'
+                ).url
+            )
+ 
+        if info['is_robux']:
+            # 로벅스 티켓: 로블록스 전신 아바타 + 로벅스 수량
+            robux_text = format_robux(info['robux_amount'])
+            purchase_text = robux_text
+ 
+            roblox_id, roblox_name = (None, None)
+            avatar_bytes = None
+            if info['roblox']:
+                roblox_id, roblox_name = await get_roblox_user(info['roblox'])
+                if roblox_id:
+                    url = await get_roblox_avatar(roblox_id, 'avatar')
+                    if url:
+                        avatar_bytes = await fetch_image_bytes(url)
+            avatar_is_roblox = avatar_bytes is not None
+            if not avatar_is_roblox:
+                avatar_bytes = discord_avatar_bytes  # 조회 실패 시 디스코드 프사로 대체
+ 
+            info_items = [
+                ('로벅스 수량', robux_text),
+                ('로블록스 닉네임', roblox_name or info['roblox'] or '-'),
+                ('자급방식', info['method'] or '-'),
+                ('담당자', staff_name),
+            ]
+        else:
+            # 인게임/기타 티켓: 디스코드 프사 + 아이템 이름/개수
+            item_name = info['item'] or '상품'
+            qty_text = format_qty(info['qty'])
+            purchase_text = (
+                f'{item_name} {qty_text}' if info['qty'] else item_name
+            )
+            avatar_bytes = discord_avatar_bytes
+            avatar_is_roblox = False
+            info_items = [
+                ('구매 아이템', item_name),
+                ('구매 개수', qty_text),
+                ('로블록스 닉네임', info['roblox'] or '-'),
+                ('담당자', staff_name),
+            ]
+ 
+        buf = await asyncio.to_thread(
+            render_purchase_card,
+            buyer_name=buyer_name,
+            purchase_text=purchase_text,
+            info_items=info_items,
+            staff_name=staff_name,
+            avatar_bytes=avatar_bytes,
+            avatar_is_roblox=avatar_is_roblox,
+        )
+ 
+        file = discord.File(buf, filename='purchase.png')
+        await log_channel.send(
+            content=(
+                f'{buyer_mention}님, **{purchase_text}** 구매 감사합니다!'
+                f' {EMOJI_GIFT}'
+            ),
+            file=file,
+        )
+    except Exception as e:
+        print(f'구매 카드 이미지 생성 실패 → 임베드로 대체: {e}')
+        traceback.print_exc()
+        await send_purchase_log_embed(interaction, owner_id)
+ 
+ 
+async def send_purchase_log_embed(
+    interaction: discord.Interaction, owner_id: str | None
+):
+    """(대체용) 구매로그 임베드 전송"""
     log_channel_id = get_log_channel_id()
     if not log_channel_id:
         print('구매로그 채널이 지정되지 않았습니다. /구매로그채널 로 지정해 주세요.')
