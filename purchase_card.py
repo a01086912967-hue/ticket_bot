@@ -172,20 +172,26 @@ def render_purchase_card(
     buyer_name: str,
     purchase_text: str,
     info_items: list,
-    staff_name: str,
     avatar_bytes: bytes | None,
     avatar_is_roblox: bool,
+    buyer_avatar_bytes: bytes | None = None,
+    guild_name: str = '',
+    guild_icon_bytes: bytes | None = None,
+    staff_name: str = '',
 ) -> BytesIO:
     """
-    buyer_name    : 디스코드 표시 이름
-    purchase_text : '로벅스 700' / '아이템명 3개' 같은 구매 요약
-    info_items    : [(라벨, 값), ...] 최대 4개 (2x2 배치)
-    avatar_bytes  : 이미지 바이트 (없으면 기본 아이콘 자리)
-    avatar_is_roblox : True면 전신 이미지, False면 원형 프로필
+    buyer_name         : 구매자 디스코드 닉네임
+    purchase_text      : '로벅스 700' / '아이템명 3개' 같은 구매 요약
+    info_items         : [(라벨, 값), ...] 최대 4개 (2x2 배치). 값이 None이면 현재 시각(KST)
+    avatar_bytes       : 왼쪽 큰 이미지 (로블록스 전신 or 디스코드 프사)
+    avatar_is_roblox   : True면 전신 이미지, False면 원형 프로필
+    buyer_avatar_bytes : 구매자 디스코드 프사 (닉네임 옆 작은 원형)
+    guild_name/icon    : 상단 우측 서버 이름/아이콘 (작게)
     """
     buyer_name = clean_text(buyer_name, '구매자')
     purchase_text = clean_text(purchase_text, '상품')
-    staff_name = clean_text(staff_name, '-')
+    guild_name = clean_text(guild_name, '') if guild_name else ''
+    now_str = datetime.now(KST).strftime('%Y-%m-%d %H:%M')
  
     base = _gradient_bg()
  
@@ -228,45 +234,75 @@ def render_purchase_card(
  
     # ---------- 오른쪽 텍스트 ----------
     rx = 524
-    rw = W - 36 - rx  # 사용 가능한 너비
+    right_edge = W - 36
+    rw = right_edge - rx  # 사용 가능한 너비
  
-    # 상단 태그
+    # 상단 좌측 태그
     tag_font = load_font(True, 22)
     tag_text = '지급 완료'
     tw = draw.textlength(tag_text, font=tag_font)
     draw.rounded_rectangle([rx, 48, rx + tw + 40, 90], radius=21, fill=ACCENT + (255,))
     draw.text((rx + 20, 69), tag_text, font=tag_font, fill=(30, 18, 54), anchor='lm')
  
+    # 상단 우측: 서버 아이콘 + 서버 이름 (아주 작게)
+    if guild_name or guild_icon_bytes:
+        g_text, g_font = ('', load_font(False, 16))
+        if guild_name:
+            g_text, g_font = fit_text(draw, guild_name, False, 16, 12, 260)
+        g_w = draw.textlength(g_text, font=g_font) if g_text else 0
+        if g_text:
+            draw.text((right_edge, 69), g_text, font=g_font, fill=MUTED, anchor='rm')
+        if guild_icon_bytes:
+            try:
+                icon_d = 26
+                gi = Image.open(BytesIO(guild_icon_bytes))
+                gx = int(right_edge - g_w - (8 if g_text else 0) - icon_d)
+                base.alpha_composite(_circle_crop(gi, icon_d), (gx, 69 - icon_d // 2))
+            except Exception as e:
+                print(f'서버 아이콘 합성 오류: {e}')
+ 
     # 타이틀
     draw.text((rx, 104), '구매 감사합니다!', font=load_font(True, 58), fill=WHITE)
  
-    # 구매자 이름
-    name_text, name_font = fit_text(draw, f'{buyer_name} 님', True, 36, 22, rw)
-    draw.text((rx, 184), name_text, font=name_font, fill=(222, 205, 255))
+    # 구매자 프사(원형) + 닉네임
+    av_d = 52
+    name_x = rx
+    if buyer_avatar_bytes:
+        try:
+            bav = Image.open(BytesIO(buyer_avatar_bytes))
+            base.alpha_composite(_circle_crop(bav, av_d), (rx, 180))
+            name_x = rx + av_d + 14
+        except Exception as e:
+            print(f'구매자 프사 합성 오류: {e}')
+    name_text, name_font = fit_text(
+        draw, f'{buyer_name} 님', True, 36, 22, right_edge - name_x
+    )
+    draw.text((name_x, 206), name_text, font=name_font, fill=(222, 205, 255), anchor='lm')
  
     # 구매 내역 (강조)
     pur_text, pur_font = fit_text(draw, f'{purchase_text} 구매', True, 32, 20, rw)
-    draw.text((rx, 236), pur_text, font=pur_font, fill=ACCENT)
+    draw.text((rx, 248), pur_text, font=pur_font, fill=ACCENT)
  
     # 구분선
-    draw.line([(rx, 304), (W - 36, 304)], fill=(104, 82, 146), width=2)
+    draw.line([(rx, 308), (right_edge, 308)], fill=(104, 82, 146), width=2)
  
     # 정보 그리드 (2x2)
     col_w = rw // 2 - 10
     label_font = load_font(False, 20)
-    for i, (label, value) in enumerate(info_items[:4]):
+    for i, item in enumerate(info_items[:4]):
+        label, value = item[0], item[1]
+        if value is None:
+            value = now_str
         col, row = i % 2, i // 2
         x = rx + col * (col_w + 20)
-        y = 322 + row * 78
+        y = 326 + row * 76
         draw.text((x, y), clean_text(label), font=label_font, fill=MUTED)
-        v_text, v_font = fit_text(draw, clean_text(value), True, 28, 16, col_w)
+        v_text, v_font = fit_text(draw, clean_text(str(value)), True, 28, 16, col_w)
         draw.text((x, y + 28), v_text, font=v_font, fill=WHITE)
  
     # 푸터
-    now = datetime.now(KST).strftime('%Y-%m-%d %H:%M')
-    footer = f'{now}  ·  이용해 주셔서 감사합니다'
-    f_text, f_font = fit_text(draw, footer, False, 18, 12, rw)
-    draw.text((rx, 476), f_text, font=f_font, fill=MUTED)
+    f_text, f_font = fit_text(draw, '이용해 주셔서 감사합니다', False, 18, 12, rw)
+    draw.text((rx, 478), f_text, font=f_font, fill=MUTED)
  
     # ---------- 둥근 모서리 마스크 ----------
     mask = Image.new('L', (W, H), 0)
