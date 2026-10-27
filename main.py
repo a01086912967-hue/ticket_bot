@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime
+import json
 import os
 import re
 import threading
@@ -62,9 +63,46 @@ CATEGORY_IDS = {
 INQUIRY_CATEGORY_ID = 1463905394618536008
 CLOSED_CATEGORY_ID = 1516393469436887160
  
-# ★ 구매로그 채널 ID를 여기에 넣어주세요 ★
-PURCHASE_LOG_CHANNEL_ID = 0
+# 구매로그 채널은 /구매로그채널 명령어로 지정합니다. (config.json에 저장)
+# Railway 재배포 시 파일이 초기화되는 게 싫으면:
+#   - Railway Volume을 만들고 환경변수 DATA_DIR=/data 로 설정하거나
+#   - 환경변수 PURCHASE_LOG_CHANNEL_ID 에 채널 ID를 넣어두세요 (기본값으로 사용)
+DATA_DIR = os.environ.get('DATA_DIR', '.')
+CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 # =========================================================
+ 
+ 
+# --- 설정 저장/불러오기 ---
+def load_config() -> dict:
+    try:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+ 
+ 
+def save_config(data: dict):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f'설정 저장 오류: {e}')
+ 
+ 
+def get_log_channel_id() -> int:
+    cfg = load_config()
+    cid = cfg.get('purchase_log_channel_id')
+    if cid:
+        return int(cid)
+    env_id = os.environ.get('PURCHASE_LOG_CHANNEL_ID')
+    return int(env_id) if env_id and env_id.isdigit() else 0
+ 
+ 
+def set_log_channel_id(channel_id: int):
+    cfg = load_config()
+    cfg['purchase_log_channel_id'] = channel_id
+    save_config(cfg)
  
 intents = discord.Intents.default()
 intents.message_content = True
@@ -199,12 +237,14 @@ async def send_purchase_log(
     interaction: discord.Interaction, owner_id: str | None
 ):
     """지급완료 시 구매로그 채널에 임베드 전송"""
-    if not PURCHASE_LOG_CHANNEL_ID:
+    log_channel_id = get_log_channel_id()
+    if not log_channel_id:
+        print('구매로그 채널이 지정되지 않았습니다. /구매로그채널 로 지정해 주세요.')
         return
     guild = interaction.guild
-    log_channel = guild.get_channel(PURCHASE_LOG_CHANNEL_ID)
+    log_channel = guild.get_channel(log_channel_id)
     if not log_channel:
-        print('구매로그 채널을 찾을 수 없습니다. PURCHASE_LOG_CHANNEL_ID 확인!')
+        print('구매로그 채널을 찾을 수 없습니다. /구매로그채널 로 다시 지정해 주세요.')
         return
  
     info = await parse_ticket_info(interaction.channel)
@@ -302,6 +342,73 @@ async def send_purchase_log(
     )
     embed.set_footer(text='지급 완료 • 이용해 주셔서 감사합니다')
     await log_channel.send(embed=embed)
+ 
+ 
+def is_ticket_channel(channel) -> bool:
+    """토픽에 OWNER 정보가 있는 채널만 티켓으로 인정 (실수로 다른 채널 삭제 방지)"""
+    topic_data = parse_topic_data(getattr(channel, 'topic', None))
+    return 'OWNER' in topic_data
+ 
+ 
+async def close_ticket_channel(
+    channel: discord.TextChannel, guild: discord.Guild, closer: discord.Member
+):
+    """티켓 닫기 공통 처리 (버튼 / %close 공용)"""
+    topic_data = parse_topic_data(channel.topic)
+    owner_id = topic_data.get('OWNER', '0')
+ 
+    orig_name = topic_data.get('ORIG_NAME')
+    if not orig_name:
+        orig_name = channel.name.replace('closed-', '')
+    else:
+        orig_name = orig_name.replace('closed-', '')
+ 
+    orig_cat_id = topic_data.get('ORIG_CAT')
+    if not orig_cat_id or orig_cat_id == '0':
+        if channel.category_id and channel.category_id != CLOSED_CATEGORY_ID:
+            orig_cat_id = str(channel.category_id)
+        else:
+            orig_cat_id = '0'
+ 
+    new_topic = build_topic_data(owner_id, orig_cat_id, orig_name)
+    closed_category = guild.get_channel(CLOSED_CATEGORY_ID)
+    new_name = f'closed-{orig_name}'
+ 
+    try:
+        edit_kwargs = {'name': new_name, 'topic': new_topic}
+        if closed_category:
+            edit_kwargs['category'] = closed_category
+        await channel.edit(**edit_kwargs)
+    except Exception as e:
+        print(f'채널 닫기 처리 오류: {e}')
+ 
+    if owner_id != '0':
+        owner_member = guild.get_member(int(owner_id))
+        if owner_member:
+            try:
+                await channel.set_permissions(
+                    owner_member, view_channel=False, read_messages=False
+                )
+            except Exception as e:
+                print(f'권한 차단 오류: {e}')
+ 
+    red_embed = discord.Embed(
+        title='🔒 티켓이 마감되었습니다.',
+        description=(
+            '이 티켓은 현재 마감 처리된 상태입니다.\n아래 관리 메뉴를'
+            ' 통해 다시 열거나 삭제할 수 있습니다.'
+        ),
+        color=0xED4245,
+    )
+ 
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    black_embed = discord.Embed(title='⚙ 관리자 티켓 관리', color=0x2B2D31)
+    owner_mention = f'<@{owner_id}>' if owner_id != '0' else '알 수 없음'
+    black_embed.add_field(name='티켓 생성자', value=owner_mention, inline=True)
+    black_embed.add_field(name='티켓 마감자', value=closer.mention, inline=True)
+    black_embed.add_field(name='마감 일시', value=f'`{now_str}`', inline=False)
+ 
+    await channel.send(embeds=[red_embed, black_embed], view=ClosedTicketView())
  
  
 # ==================== [ Views & Controls ] ====================
@@ -437,78 +544,14 @@ class CloseConfirmView(discord.ui.View):
             return
  
         await interaction.response.defer()
-        channel = interaction.channel
-        guild = interaction.guild
  
         try:
             await interaction.message.delete()
         except:
             pass
  
-        topic_data = parse_topic_data(channel.topic)
-        owner_id = topic_data.get('OWNER', '0')
- 
-        orig_name = topic_data.get('ORIG_NAME')
-        if not orig_name:
-            orig_name = channel.name.replace('closed-', '')
-        else:
-            orig_name = orig_name.replace('closed-', '')
- 
-        orig_cat_id = topic_data.get('ORIG_CAT')
-        if not orig_cat_id or orig_cat_id == '0':
-            if channel.category_id and channel.category_id != CLOSED_CATEGORY_ID:
-                orig_cat_id = str(channel.category_id)
-            else:
-                orig_cat_id = '0'
- 
-        new_topic = build_topic_data(owner_id, orig_cat_id, orig_name)
-        closed_category = guild.get_channel(CLOSED_CATEGORY_ID)
-        new_name = f'closed-{orig_name}'
- 
-        try:
-            edit_kwargs = {'name': new_name, 'topic': new_topic}
-            if closed_category:
-                edit_kwargs['category'] = closed_category
-            await channel.edit(**edit_kwargs)
-        except Exception as e:
-            print(f'채널 닫기 처리 오류: {e}')
- 
-        if owner_id != '0':
-            owner_member = guild.get_member(int(owner_id))
-            if owner_member:
-                try:
-                    await channel.set_permissions(
-                        owner_member, view_channel=False, read_messages=False
-                    )
-                except Exception as e:
-                    print(f'권한 차단 오류: {e}')
- 
-        red_embed = discord.Embed(
-            title='🔒 티켓이 마감되었습니다.',
-            description=(
-                '이 티켓은 현재 마감 처리된 상태입니다.\n아래 관리 메뉴를'
-                ' 통해 다시 열거나 삭제할 수 있습니다.'
-            ),
-            color=0xED4245,
-        )
- 
-        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        black_embed = discord.Embed(
-            title='⚙ 관리자 티켓 관리', color=0x2B2D31
-        )
-        owner_mention = f'<@{owner_id}>' if owner_id != '0' else '알 수 없음'
-        black_embed.add_field(
-            name='티켓 생성자', value=owner_mention, inline=True
-        )
-        black_embed.add_field(
-            name='티켓 마감자', value=interaction.user.mention, inline=True
-        )
-        black_embed.add_field(
-            name='마감 일시', value=f'`{now_str}`', inline=False
-        )
- 
-        await channel.send(
-            embeds=[red_embed, black_embed], view=ClosedTicketView()
+        await close_ticket_channel(
+            interaction.channel, interaction.guild, interaction.user
         )
  
     @discord.ui.button(
@@ -1064,7 +1107,7 @@ class InquirySelectView(discord.ui.View):
 class TicketBot(commands.Bot):
  
     def __init__(self):
-        super().__init__(command_prefix='!', intents=intents)
+        super().__init__(command_prefix='%', intents=intents)
  
     async def setup_hook(self):
         self.add_view(MainTicketView())
@@ -1234,6 +1277,94 @@ async def send_message(
         await interaction.response.send_message(
             f'❌ 전송 실패: {e}', ephemeral=True
         )
+ 
+ 
+# [명령어 5] /구매로그채널
+@bot.tree.command(
+    name='구매로그채널',
+    description='지급완료 시 구매로그가 전송될 채널을 지정합니다. (관리자 전용)',
+)
+@app_commands.describe(channel='구매로그를 보낼 채널')
+async def set_purchase_log_channel(
+    interaction: discord.Interaction, channel: discord.TextChannel
+):
+    is_admin = (
+        interaction.user.guild_permissions.administrator
+        or ADMIN_ROLE_ID in [r.id for r in interaction.user.roles]
+    )
+    if not is_admin:
+        await interaction.response.send_message(
+            '❌ 관리자만 사용할 수 있습니다.', ephemeral=True
+        )
+        return
+ 
+    perms = channel.permissions_for(interaction.guild.me)
+    if not (perms.view_channel and perms.send_messages and perms.embed_links):
+        await interaction.response.send_message(
+            f'❌ 봇이 {channel.mention} 채널에 메시지/임베드를 보낼 권한이'
+            ' 없습니다. 권한을 확인해 주세요.',
+            ephemeral=True,
+        )
+        return
+ 
+    set_log_channel_id(channel.id)
+    await interaction.response.send_message(
+        f'✅ 구매로그 채널을 {channel.mention} 으로 지정했습니다.',
+        ephemeral=True,
+    )
+ 
+ 
+# [프리픽스 명령어 1] %close - 티켓 닫기 (마감 카테고리로 이동)
+@bot.command(name='close')
+async def prefix_close(ctx: commands.Context):
+    if not isinstance(ctx.author, discord.Member) or not is_admin_or_staff(
+        ctx.author
+    ):
+        return
+ 
+    if not is_ticket_channel(ctx.channel):
+        await ctx.send('❌ 티켓 채널에서만 사용할 수 있습니다.', delete_after=5)
+        return
+ 
+    if (
+        ctx.channel.category_id == CLOSED_CATEGORY_ID
+        or ctx.channel.name.startswith('closed-')
+    ):
+        await ctx.send('❌ 이미 닫힌 티켓입니다.', delete_after=5)
+        return
+ 
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+ 
+    await close_ticket_channel(ctx.channel, ctx.guild, ctx.author)
+ 
+ 
+# [프리픽스 명령어 2] %delete - 티켓 완전 삭제
+@bot.command(name='delete')
+async def prefix_delete(ctx: commands.Context):
+    if not isinstance(ctx.author, discord.Member) or not is_admin_or_staff(
+        ctx.author
+    ):
+        return
+ 
+    if not is_ticket_channel(ctx.channel):
+        await ctx.send('❌ 티켓 채널에서만 사용할 수 있습니다.', delete_after=5)
+        return
+ 
+    notice = await ctx.send('⏳ 5초 후 티켓이 삭제됩니다.')
+    for i in range(4, 0, -1):
+        await asyncio.sleep(1)
+        try:
+            await notice.edit(content=f'⏳ {i}초 후 티켓이 삭제됩니다.')
+        except Exception:
+            pass
+    await asyncio.sleep(1)
+    try:
+        await ctx.channel.delete()
+    except Exception as e:
+        print(f'티켓 삭제 오류: {e}')
  
  
 # ==================== [ 실행 ] ====================
