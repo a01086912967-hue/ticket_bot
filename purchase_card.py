@@ -12,13 +12,6 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
  
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FONT_REGULAR_PATH = os.environ.get(
-    'FONT_REGULAR', os.path.join(BASE_DIR, 'fonts', 'NotoSansKR-Regular.otf')
-)
-FONT_BOLD_PATH = os.environ.get(
-    'FONT_BOLD', os.path.join(BASE_DIR, 'fonts', 'NotoSansKR-Bold.otf')
-)
- 
 KST = timezone(timedelta(hours=9))
  
 # 색상
@@ -31,22 +24,84 @@ MUTED = (176, 166, 204)
 W, H = 1100, 520
  
 _font_cache = {}
+_font_path_cache = {}
+ 
+FONT_EXTS = ('.otf', '.ttf', '.ttc')
+SYSTEM_FONT_CANDIDATES = [
+    '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/truetype/nanum/NanumGothic.ttf',
+    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+]
  
  
 class FontMissingError(Exception):
     pass
  
  
+def _scan_fonts() -> list:
+    """프로젝트 폴더 안(하위 폴더 포함)에서 폰트 파일을 모두 찾는다."""
+    found = []
+    for root_dir in {BASE_DIR, os.getcwd()}:
+        for root, dirs, files in os.walk(root_dir):
+            dirs[:] = [
+                d for d in dirs
+                if d not in ('.git', '.venv', 'venv', 'node_modules', '__pycache__')
+            ]
+            for name in files:
+                if name.lower().endswith(FONT_EXTS):
+                    path = os.path.join(root, name)
+                    if path not in found:
+                        found.append(path)
+    return found
+ 
+ 
+def _find_font(bold: bool) -> str:
+    if bold in _font_path_cache:
+        return _font_path_cache[bold]
+ 
+    env = os.environ.get('FONT_BOLD' if bold else 'FONT_REGULAR')
+    if env and os.path.isfile(env):
+        _font_path_cache[bold] = env
+        return env
+ 
+    found = _scan_fonts()
+    want = 'bold' if bold else 'regular'
+    pick = None
+    for path in found:  # 이름에 bold / regular 가 들어간 파일 우선
+        if want in os.path.basename(path).lower():
+            pick = path
+            break
+    if not pick and found:  # 없으면 아무 폰트나 사용
+        pick = found[0]
+    if not pick:  # 시스템 폰트
+        for path in SYSTEM_FONT_CANDIDATES:
+            if os.path.isfile(path):
+                pick = path
+                break
+    if not pick:
+        raise FontMissingError(
+            f'폰트 파일을 찾을 수 없습니다. BASE_DIR={BASE_DIR}, '
+            f'폴더 내용={sorted(os.listdir(BASE_DIR))}'
+        )
+    _font_path_cache[bold] = pick
+    return pick
+ 
+ 
 def load_font(bold: bool, size: int) -> ImageFont.FreeTypeFont:
     key = (bold, size)
     if key in _font_cache:
         return _font_cache[key]
-    path = FONT_BOLD_PATH if bold else FONT_REGULAR_PATH
+    path = _find_font(bold)
     try:
         font = ImageFont.truetype(path, size)
     except Exception as e:
+        try:
+            fsize = os.path.getsize(path)
+        except Exception:
+            fsize = 'N/A'
         raise FontMissingError(
-            f'폰트를 불러올 수 없습니다: {path} (fonts 폴더를 같이 올렸는지 확인)'
+            f'폰트를 열 수 없습니다: {path} (파일 크기={fsize} bytes, '
+            '정상이라면 약 2,000,000 bytes) → 파일이 깨졌거나 잘못 올라갔을 수 있어요.'
         ) from e
     _font_cache[key] = font
     return font
