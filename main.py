@@ -179,7 +179,7 @@ async def get_roblox_avatar(user_id: int, kind: str = 'avatar-headshot'):
 # ==================== [ 티켓 양식 파싱 + 구매로그 전송 ] ====================
 async def parse_ticket_info(channel: discord.TextChannel):
     """티켓 첫 메시지의 양식 임베드에서 정보 추출.
-    - 로벅스 티켓: 로벅스 수량 / 자급방식 / 로블 아이디 / 아이템 이름
+    - 로벅스 티켓: 로벅스 수량 / 지급방식 / 로블 아이디 / 아이템 이름
     - 인게임 티켓: 아이템 이름 / 로블 아이디 / 아이템 수량
     - 기타 티켓  : 아이템 이름 / 아이템 수량
     """
@@ -203,7 +203,7 @@ async def parse_ticket_info(channel: discord.TextChannel):
                     info['is_robux'] = True
                     info['robux_amount'] = val
                     found = True
-                elif '자급방식' in name:
+                elif '지급방식' in name or '자급방식' in name:
                     info['method'] = val
                     found = True
                 elif '로블 아이디' in name:  # 로블록스 닉네임
@@ -248,6 +248,38 @@ async def fetch_image_bytes(url: str):
     return None
  
  
+async def get_buyer(guild: discord.Guild, owner_id):
+    """구매자 Member/User 가져오기 (멤버 캐시에 없어도 API로 조회)"""
+    if not owner_id:
+        return None
+    uid = int(owner_id)
+    member = guild.get_member(uid)
+    if member:
+        return member
+    try:
+        return await guild.fetch_member(uid)
+    except Exception:
+        pass
+    try:
+        return await bot.fetch_user(uid)
+    except Exception:
+        return None
+ 
+ 
+async def get_member_only(guild: discord.Guild, owner_id):
+    """권한 설정용: 캐시에 없어도 API로 Member 조회 (실패 시 None)"""
+    if not owner_id:
+        return None
+    uid = int(owner_id)
+    member = guild.get_member(uid)
+    if member:
+        return member
+    try:
+        return await guild.fetch_member(uid)
+    except Exception:
+        return None
+ 
+ 
 async def send_purchase_log(
     interaction: discord.Interaction, owner_id: str | None
 ):
@@ -265,17 +297,23 @@ async def send_purchase_log(
  
     try:
         info = await parse_ticket_info(interaction.channel)
-        owner_member = guild.get_member(int(owner_id)) if owner_id else None
+        buyer = await get_buyer(guild, owner_id)
         buyer_mention = f'<@{owner_id}>' if owner_id else '구매자'
-        buyer_name = owner_member.display_name if owner_member else '구매자'
+        buyer_name = buyer.display_name if buyer else '구매자'
         staff_name = interaction.user.display_name
  
-        discord_avatar_bytes = None
-        if owner_member:
-            discord_avatar_bytes = await fetch_image_bytes(
-                owner_member.display_avatar.replace(
-                    size=512, format='png'
-                ).url
+        # 구매자 디스코드 프사
+        buyer_avatar_bytes = None
+        if buyer:
+            buyer_avatar_bytes = await fetch_image_bytes(
+                buyer.display_avatar.replace(size=256, format='png').url
+            )
+ 
+        # 서버 아이콘
+        guild_icon_bytes = None
+        if guild.icon:
+            guild_icon_bytes = await fetch_image_bytes(
+                guild.icon.replace(size=128, format='png').url
             )
  
         if info['is_robux']:
@@ -283,23 +321,22 @@ async def send_purchase_log(
             robux_text = format_robux(info['robux_amount'])
             purchase_text = robux_text
  
-            roblox_id, roblox_name = (None, None)
             avatar_bytes = None
             if info['roblox']:
-                roblox_id, roblox_name = await get_roblox_user(info['roblox'])
+                roblox_id, _ = await get_roblox_user(info['roblox'])
                 if roblox_id:
                     url = await get_roblox_avatar(roblox_id, 'avatar')
                     if url:
                         avatar_bytes = await fetch_image_bytes(url)
             avatar_is_roblox = avatar_bytes is not None
             if not avatar_is_roblox:
-                avatar_bytes = discord_avatar_bytes  # 조회 실패 시 디스코드 프사로 대체
+                avatar_bytes = buyer_avatar_bytes  # 조회 실패 시 디스코드 프사로 대체
  
             info_items = [
                 ('로벅스 수량', robux_text),
-                ('로블록스 닉네임', roblox_name or info['roblox'] or '-'),
-                ('자급방식', info['method'] or '-'),
+                ('지급방식', info['method'] or '-'),
                 ('담당자', staff_name),
+                ('지급 일시', None),
             ]
         else:
             # 인게임/기타 티켓: 디스코드 프사 + 아이템 이름/개수
@@ -308,13 +345,13 @@ async def send_purchase_log(
             purchase_text = (
                 f'{item_name} {qty_text}' if info['qty'] else item_name
             )
-            avatar_bytes = discord_avatar_bytes
+            avatar_bytes = buyer_avatar_bytes
             avatar_is_roblox = False
             info_items = [
                 ('구매 아이템', item_name),
                 ('구매 개수', qty_text),
-                ('로블록스 닉네임', info['roblox'] or '-'),
                 ('담당자', staff_name),
+                ('지급 일시', None),
             ]
  
         buf = await asyncio.to_thread(
@@ -322,9 +359,11 @@ async def send_purchase_log(
             buyer_name=buyer_name,
             purchase_text=purchase_text,
             info_items=info_items,
-            staff_name=staff_name,
             avatar_bytes=avatar_bytes,
             avatar_is_roblox=avatar_is_roblox,
+            buyer_avatar_bytes=buyer_avatar_bytes,
+            guild_name=guild.name,
+            guild_icon_bytes=guild_icon_bytes,
         )
  
         file = discord.File(buf, filename='purchase.png')
@@ -357,7 +396,7 @@ async def send_purchase_log_embed(
  
     info = await parse_ticket_info(interaction.channel)
     buyer_mention = f'<@{owner_id}>' if owner_id else '구매자'
-    owner_member = guild.get_member(int(owner_id)) if owner_id else None
+    owner_member = await get_buyer(guild, owner_id)
     now_ts = int(time.time())
  
     # ---------- 로벅스 티켓: 로블록스 아바타 포함 ----------
@@ -396,9 +435,9 @@ async def send_purchase_log_embed(
  
         embed.add_field(name=f'{EMOJI_BUX} 로벅스 수량', value=robux_text, inline=True)
         if info['method']:
-            embed.add_field(name='💳 자급방식', value=info['method'], inline=True)
+            embed.add_field(name='💳 지급방식', value=info['method'], inline=True)
         embed.add_field(
-            name='🧑‍💼 담당자', value=interaction.user.mention, inline=True
+            name='💼 담당자', value=interaction.user.mention, inline=True
         )
         embed.add_field(
             name='🕒 지급 시간',
@@ -441,7 +480,7 @@ async def send_purchase_log_embed(
     if info['roblox']:
         embed.add_field(name='🎮 로블록스 닉네임', value=info['roblox'], inline=True)
     embed.add_field(
-        name='🧑‍💼 담당자', value=interaction.user.mention, inline=True
+        name='💼 담당자', value=interaction.user.mention, inline=True
     )
     embed.add_field(
         name='🕒 지급 시간',
@@ -491,7 +530,7 @@ async def close_ticket_channel(
         print(f'채널 닫기 처리 오류: {e}')
  
     if owner_id != '0':
-        owner_member = guild.get_member(int(owner_id))
+        owner_member = await get_member_only(guild, owner_id)
         if owner_member:
             try:
                 await channel.set_permissions(
@@ -729,7 +768,7 @@ class ClosedTicketView(discord.ui.View):
             print(f'채널 복구 오류: {e}')
  
         if owner_id != '0':
-            owner_member = guild.get_member(int(owner_id))
+            owner_member = await get_member_only(guild, owner_id)
             if owner_member:
                 try:
                     user_overwrite = discord.PermissionOverwrite(
@@ -808,7 +847,7 @@ class TicketModal(discord.ui.Modal):
                 placeholder='예: 700',
             )
             self.q2 = discord.ui.TextInput(
-                label='로벅스 자급방식을 선택해 주세요.',
+                label='로벅스 지급방식을 선택해 주세요.',
                 placeholder='예: 패스',
             )
             self.q3 = discord.ui.TextInput(
@@ -963,7 +1002,7 @@ class TicketModal(discord.ui.Modal):
                     inline=False,
                 )
                 info_embed.add_field(
-                    name='로벅스 자급방식을 선택해 주세요.',
+                    name='로벅스 지급방식을 선택해 주세요.',
                     value=f'```\n{self.q2.value}\n```',
                     inline=False,
                 )
